@@ -29,8 +29,8 @@ const CLASS_NAMES = [
     "Pisang",
     "Rambutan",
     "Salak",
-    "Semangka",
-    "Stroberi"
+    "Semangka", // Class ID 14
+    "Stroberi"  // Class ID 15
 ];
 // ------------------------------------------
 
@@ -55,19 +55,18 @@ function xywh_to_xyxy(x, y, w, h) {
   return [x1, y1, x2, y2];
 }
 
+// --- FUNGSI UTAMA PERBAIKAN ---
 function drawBoxes(boxes) {
-  // --- PENGATURAN MIRRORING DAN GAMBAR VIDEO ---
   
-  // 1. Simpan konteks asli
-  ctx.save();
-  
-  // 2. Terapkan transformasi mirroring horizontal (membalik tampilan)
-  ctx.scale(-1, 1);
-  ctx.translate(-canvas.width, 0);
-  
-  // 3. Gambar video frame (Sekarang terlihat normal/tidak terbalik)
+  // 1. Gambar video frame (tanpa mirroring)
+  // Ini akan menghasilkan video yang terbalik, tetapi konsisten.
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
   
+  // 2. Terapkan transformasi mirroring hanya pada konteks deteksi (canvas)
+  ctx.save();
+  ctx.scale(-1, 1);
+  ctx.translate(-canvas.width, 0); // Menggeser kembali setelah scaling -1
+
   boxes.forEach(b => {
     // Scaling koordinat kotak
     const x = b.x1 * (canvas.width / INPUT_SIZE);
@@ -75,23 +74,29 @@ function drawBoxes(boxes) {
     const w = (b.x2 - b.x1) * (canvas.width / INPUT_SIZE);
     const h = (b.y2 - b.y1) * (canvas.height / INPUT_SIZE);
 
-    // Box
+    // Box (Digambar dalam konteks yang sudah di-mirror)
     ctx.strokeStyle = "lime";
     ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 200));
     ctx.strokeRect(x, y, w, h);
 
-    // Label: Gambar Teks di Canvas yang sudah di-mirror
-    ctx.save(); // Simpan konteks yang sudah di-mirror
-    ctx.scale(-1, 1); // Balikkan lagi hanya untuk teks agar tidak terbalik di layar
+    // Label: Gambar Teks (Koreksi Mirroring Ganda)
     
-    const className = CLASS_NAMES[b.classId] || `Unknown Class ${b.classId}`; // Ambil nama kelas
+    // Simpan konteks yang sudah di-mirror (agar bisa dibalik hanya untuk teks)
+    ctx.save(); 
+    
+    // Balikkan lagi transformasi untuk Teks agar terlihat normal
+    ctx.scale(-1, 1); 
+    
+    // --- MENGAMBIL NAMA KELAS ---
+    const className = CLASS_NAMES[b.classId] || `Unknown Class ${b.classId}`; 
     const label = `${className} ${(b.score*100).toFixed(1)}%`;
     
     ctx.font = "18px Arial";
     const textW = ctx.measureText(label).width;
     const pad = 6;
     
-    // Koordinat X label harus disesuaikan (dibalik)
+    // Hitung posisi teks yang benar setelah dibalik
+    // Posisi x: -(koordinat box + lebar teks)
     const textX = -(x + textW + pad);
     
     // Label bg
@@ -105,11 +110,11 @@ function drawBoxes(boxes) {
     ctx.restore(); // Kembalikan ke konteks canvas yang sudah di-mirror
   });
   
-  // 4. Kembalikan konteks canvas ke kondisi awal (penting!)
+  // 3. Kembalikan konteks canvas ke kondisi awal
   ctx.restore(); 
 }
 
-// --- Post-Processing dengan Koreksi YOLOv8 dan Debugging ---
+// --- Post-Processing dengan Koreksi YOLOv8 dan Debugging (Tidak Berubah) ---
 
 async function postprocess(outputTensor) {
   // Model output shape: [1, 20, 8400] -> transpose -> [8400, 20]
