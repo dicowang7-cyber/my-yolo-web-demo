@@ -15,22 +15,22 @@ const NUM_CLASSES = 16;   
 
 // --- DEFINISI NAMA KELAS AKTUAL (16 Kelas) ---
 const CLASS_NAMES = [
-    "Alpukat",
-    "Anggur",
-    "Apel",
-    "Apel Hijau",
-    "Jeruk",
-    "Lemon",
-    "Mangga",
-    "Melon",
-    "Nanas",
-    "Pepaya",
-    "Pir",
-    "Pisang",
-    "Rambutan",
-    "Salak",
-    "Semangka", // Class ID 14
-    "Stroberi"  // Class ID 15
+    "Alpukat",
+    "Anggur",
+    "Apel",
+    "Apel Hijau",
+    "Jeruk",
+    "Lemon",
+    "Mangga",
+    "Melon",
+    "Nanas",
+    "Pepaya",
+    "Pir",
+    "Pisang",
+    "Rambutan",
+    "Salak",
+    "Semangka", 
+    "Stroberi" 
 ];
 // ------------------------------------------
 
@@ -55,63 +55,54 @@ function xywh_to_xyxy(x, y, w, h) {
   return [x1, y1, x2, y2];
 }
 
-// --- FUNGSI UTAMA PERBAIKAN ---
+// --- FUNGSI UTAMA PERBAIKAN: Mirroring Video dan Deteksi ---
 function drawBoxes(boxes) {
-  
-  // 1. Gambar video frame (tanpa mirroring)
-  // Ini akan menghasilkan video yang terbalik, tetapi konsisten.
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  
-  // 2. Terapkan transformasi mirroring hanya pada konteks deteksi (canvas)
+  
+  // 1. Gambar video frame dengan MIRRORING
   ctx.save();
   ctx.scale(-1, 1);
-  ctx.translate(-canvas.width, 0); // Menggeser kembali setelah scaling -1
-
+  ctx.translate(-canvas.width, 0); 
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  ctx.restore(); // Kembalikan konteks ke normal setelah menggambar video
+  
+  // 2. Gambar deteksi dan teks di konteks NORMAL
   boxes.forEach(b => {
-    // Scaling koordinat kotak
-    const x = b.x1 * (canvas.width / INPUT_SIZE);
-    const y = b.y1 * (canvas.height / INPUT_SIZE);
-    const w = (b.x2 - b.x1) * (canvas.width / INPUT_SIZE);
-    const h = (b.y2 - b.y1) * (canvas.height / INPUT_SIZE);
-
-    // Box (Digambar dalam konteks yang sudah di-mirror)
+    // Ambil koordinat yang sudah diskalakan
+    const scaledX1 = b.x1 * (canvas.width / INPUT_SIZE);
+    const scaledX2 = b.x2 * (canvas.width / INPUT_SIZE);
+    const scaledY1 = b.y1 * (canvas.height / INPUT_SIZE);
+    const scaledY2 = b.y2 * (canvas.height / INPUT_SIZE);
+    
+    // Terapkan formula MIRRORING ke koordinat X
+    // X awal deteksi harus dibalik: canvas.width - X2_scaled (untuk x1)
+    const x = canvas.width - scaledX2; 
+    const y = scaledY1;
+    const w = scaledX2 - scaledX1;
+    const h = scaledY2 - scaledY1;
+    
+    // Box (Digambar dalam koordinat normal canvas, yang sesuai dengan video yang di-mirror)
     ctx.strokeStyle = "lime";
     ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 200));
     ctx.strokeRect(x, y, w, h);
 
-    // Label: Gambar Teks (Koreksi Mirroring Ganda)
-    
-    // Simpan konteks yang sudah di-mirror (agar bisa dibalik hanya untuk teks)
-    ctx.save(); 
-    
-    // Balikkan lagi transformasi untuk Teks agar terlihat normal
-    ctx.scale(-1, 1); 
-    
-    // --- MENGAMBIL NAMA KELAS ---
-    const className = CLASS_NAMES[b.classId] || `Unknown Class ${b.classId}`; 
-    const label = `${className} ${(b.score*100).toFixed(1)}%`;
-    
+    // Label: Gambar Teks di koordinat NORMAL (Teks TIDAK terbalik)
+    
+    // Mengambil nama kelas dan membentuk label
+    const className = CLASS_NAMES[b.classId] || `Unknown Class ${b.classId}`; 
+    const label = `${className} ${(b.score*100).toFixed(1)}%`; 
+    
     ctx.font = "18px Arial";
     const textW = ctx.measureText(label).width;
     const pad = 6;
-    
-    // Hitung posisi teks yang benar setelah dibalik
-    // Posisi x: -(koordinat box + lebar teks)
-    const textX = -(x + textW + pad);
-    
-    // Label bg
+    
+    // Label bg (koordinat normal)
     ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillRect(textX, y - 22, textW + pad, 22);
+    ctx.fillRect(x, y - 22, textW + pad, 22);
 
-    // Text
+    // Text (koordinat normal)
     ctx.fillStyle = "lime";
-    ctx.fillText(label, -(x + 4), y - 6);
-
-    ctx.restore(); // Kembalikan ke konteks canvas yang sudah di-mirror
+    ctx.fillText(label, x + 4, y - 6);
   });
-  
-  // 3. Kembalikan konteks canvas ke kondisi awal
-  ctx.restore(); 
 }
 
 // --- Post-Processing dengan Koreksi YOLOv8 dan Debugging (Tidak Berubah) ---
@@ -128,16 +119,16 @@ async function postprocess(outputTensor) {
   const scores = [];
   const classIds = [];
     
-    let maxOverallScore = 0; 
+    let maxOverallScore = 0; 
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
-    
+    
     const x = row[0];
     const y = row[1];
     const w = row[2];
     const h = row[3];
-    
+    
     const classLogits = row.slice(4); 
     const probs = softmax(classLogits);
     const maxProb = Math.max(...probs);
@@ -155,7 +146,7 @@ async function postprocess(outputTensor) {
 
     boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]); 
     scores.push(finalScore);
-    classIds.push(classId); 
+    classIds.push(classId); 
   }
 
     console.log(`Max class score found: ${maxOverallScore.toFixed(3)}`);
@@ -189,7 +180,7 @@ async function postprocess(outputTensor) {
   return final;
 }
 
-// --- Inisialisasi dan Setup Kamera/Model ---
+// --- Inisialisasi dan Setup Kamera/Model (Tidak Berubah) ---
 
 async function loadModel() {
   try {
@@ -220,7 +211,7 @@ async function setupCamera() {
   }
 }
 
-// --- Detection Loop ---
+// --- Detection Loop (Tidak Berubah) ---
 
 async function detectLoop() {
   if (!model) return;
@@ -252,7 +243,6 @@ async function detectLoop() {
 
   const detections = await postprocess(output);
 
-  // drawBoxes sekarang menangani drawing video dan mirroring
   drawBoxes(detections);
 
   tf.dispose([input, output]);
@@ -261,7 +251,7 @@ async function detectLoop() {
   requestAnimationFrame(detectLoop);
 }
 
-// --- Main Execution ---
+// --- Main Execution (Tidak Berubah) ---
 
 (async () => {
   await loadModel();
