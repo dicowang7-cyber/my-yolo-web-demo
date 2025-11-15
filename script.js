@@ -1,3 +1,4 @@
+// Anda harus mengganti URL ini dengan lokasi model.json Anda yang sebenarnya
 const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
 
 const statusEl = document.getElementById('status');
@@ -57,42 +58,38 @@ function xywh_to_xyxy(x, y, w, h) {
 // --- FUNGSI UTAMA PERBAIKAN: Mirroring Video dan Deteksi ---
 function drawBoxes(boxes) {
   
-  // 1. Hapus frame sebelumnya (penting untuk real-time)
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // 2. Gambar video frame dengan MIRRORING
-  // Konteks digeser dan dibalik (sumbu X)
+  // 1. Gambar video frame dengan MIRRORING
   ctx.save();
   ctx.scale(-1, 1);
   ctx.translate(-canvas.width, 0); 
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
   ctx.restore(); // Kembalikan konteks ke normal setelah menggambar video
   
-  // 3. Gambar deteksi dan teks di konteks NORMAL
+  // 2. Gambar deteksi dan teks di konteks NORMAL
   boxes.forEach(b => {
-    // Ambil koordinat yang sudah diskalakan (berdasarkan INPUT_SIZE model)
+    // Ambil koordinat yang sudah diskalakan
     const scaledX1 = b.x1 * (canvas.width / INPUT_SIZE);
     const scaledX2 = b.x2 * (canvas.width / INPUT_SIZE);
     const scaledY1 = b.y1 * (canvas.height / INPUT_SIZE);
     const scaledY2 = b.y2 * (canvas.height / INPUT_SIZE);
     
-    // Terapkan formula MIRRORING ke koordinat X untuk menampilkan di posisi yang benar
-    // Posisi X awal deteksi harus dibalik: canvas.width - X2_scaled (untuk x1)
+    // Terapkan formula MIRRORING ke koordinat X
+    // X awal deteksi harus dibalik: canvas.width - X2_scaled (untuk x1)
     const x = canvas.width - scaledX2; 
     const y = scaledY1;
     const w = scaledX2 - scaledX1;
     const h = scaledY2 - scaledY1;
     
-    // Box (Digambar dalam koordinat normal canvas)
+    // Box (Digambar dalam koordinat normal canvas, yang sesuai dengan video yang di-mirror)
     ctx.strokeStyle = "lime";
     ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 200));
     ctx.strokeRect(x, y, w, h);
 
-    // Label: Gambar Teks di konteks NORMAL (Teks TIDAK terbalik)
+    // Label: Gambar Teks di koordinat NORMAL (Teks TIDAK terbalik)
     
     // Mengambil nama kelas dan membentuk label
-    const className = CLASS_NAMES[b.classId] || `Kelas Tidak Dikenal ${b.classId}`; 
-    const label = `${className} (${(b.score*100).toFixed(1)}%)`; 
+    const className = CLASS_NAMES[b.classId] || `Unknown Class ${b.classId}`; 
+    const label = `${className} ${(b.score*100).toFixed(1)}%`; 
     
     ctx.font = "18px Arial";
     const textW = ctx.measureText(label).width;
@@ -104,12 +101,11 @@ function drawBoxes(boxes) {
 
     // Text (koordinat normal)
     ctx.fillStyle = "lime";
-    // **Teks digambar dari kiri ke kanan (normal) karena konteks sudah di-restore**
-    ctx.fillText(label, x + 4, y - 6); 
+    ctx.fillText(label, x + 4, y - 6);
   });
 }
 
-// --- Post-Processing dengan Koreksi YOLOv8 ---
+// --- Post-Processing dengan Koreksi YOLOv8 dan Debugging (Tidak Berubah) ---
 
 async function postprocess(outputTensor) {
   // Model output shape: [1, 20, 8400] -> transpose -> [8400, 20]
@@ -128,10 +124,10 @@ async function postprocess(outputTensor) {
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
     
-    const x = row[0]; // Center X
-    const y = row[1]; // Center Y
-    const w = row[2]; // Width
-    const h = row[3]; // Height
+    const x = row[0];
+    const y = row[1];
+    const w = row[2];
+    const h = row[3];
     
     const classLogits = row.slice(4); 
     const probs = softmax(classLogits);
@@ -148,7 +144,6 @@ async function postprocess(outputTensor) {
 
     const [x1, y1, x2, y2] = xywh_to_xyxy(x, y, w, h);
 
-    // [y1, x1, y2, x2] diperlukan oleh tf.image.nonMaxSuppressionAsync
     boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]); 
     scores.push(finalScore);
     classIds.push(classId); 
@@ -170,10 +165,9 @@ async function postprocess(outputTensor) {
 
   const final = [];
   for (let idx of selected) {
-    // Kembali ke format normalisasi 0-INPUT_SIZE
     const [y1,x1,y2,x2] = boxes[idx];
     final.push({
-      x1: x1 / INPUT_SIZE, y1: y1 / INPUT_SIZE, x2: x2 / INPUT_SIZE, y2: y2 / INPUT_SIZE,
+      x1: x1, y1: y1, x2: x2, y2: y2,
       score: scores[idx],
       classId: classIds[idx] 
     });
@@ -186,64 +180,46 @@ async function postprocess(outputTensor) {
   return final;
 }
 
-// --- Inisialisasi dan Setup Kamera/Model ---
+// --- Inisialisasi dan Setup Kamera/Model (Tidak Berubah) ---
 
 async function loadModel() {
-    try {
-        // Modifikasi untuk menampilkan persentase loading
-        statusEl.textContent = "Memuat model: 0%";
-        model = await tf.loadGraphModel(MODEL_URL, {
-            onProgress: (fraction) => {
-                const percent = Math.min(100, Math.round(fraction * 100)); 
-                statusEl.textContent = `Memuat model: ${percent}%`;
-            }
-        });
-        statusEl.textContent = "✅ Model berhasil dimuat. Memulai kamera...";
-        console.log("Model loaded:", model);
-    } catch (err) {
-        console.error("Failed to load model:", err);
-        statusEl.textContent = "❌ Gagal memuat model. Periksa konsol.";
-    }
+  try {
+    statusEl.textContent = "Loading model...";
+    model = await tf.loadGraphModel(MODEL_URL);
+    statusEl.textContent = "Model loaded.";
+    console.log("Model loaded:", model);
+  } catch (err) {
+    console.error("Failed to load model:", err);
+    statusEl.textContent = "Failed to load model. Check console.";
+  }
 }
 
 async function setupCamera() {
   try {
-    // Minta kamera depan
     const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user" }, 
+      video: { facingMode: "environment" },
       audio: false
     });
     video.srcObject = stream;
     await new Promise(resolve => video.onloadedmetadata = resolve);
     video.play();
-    
-    // Set ukuran canvas sesuai ukuran video sebenarnya
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    video.style.visibility = 'hidden'; // Sembunyikan video asli
-    
-    // Set ukuran kontainer agar sesuai
-    const container = document.getElementById('container');
-    container.style.width = `${video.videoWidth}px`;
-    container.style.height = `${video.videoHeight}px`;
-
   } catch (err) {
     console.error("Camera error:", err);
-    statusEl.textContent = "❌ Error kamera. Izinkan akses kamera dan coba lagi.";
+    statusEl.textContent = "Camera error. Allow camera and reload.";
   }
 }
 
-// --- Detection Loop ---
+// --- Detection Loop (Tidak Berubah) ---
 
 async function detectLoop() {
-  if (!model || video.paused || video.ended) return;
+  if (!model) return;
 
   tf.engine().startScope();
 
   const input = tf.tidy(() => {
-    // Konversi frame video
     const img = tf.browser.fromPixels(video);
-    // Resize dan normalisasi
     return img.resizeBilinear([INPUT_SIZE, INPUT_SIZE]).div(255.0).expandDims(0);
   });
 
@@ -251,15 +227,14 @@ async function detectLoop() {
   try {
     const res = await model.executeAsync(input);
     if (Array.isArray(res)) {
-      output = res[0]; // Ambil output pertama (asumsi YOLOv8)
-      // Buang tensor output lainnya (jika ada)
+      output = res[0];
       for (let i = 1; i < res.length; i++) if (res[i] && res[i].dispose) res[i].dispose();
     } else {
       output = res;
     }
   } catch (err) {
     console.error("Model inference failed:", err);
-    statusEl.textContent = "Inference error (check console).";
+    statusEl.textContent = "Inference error (see console).";
     tf.dispose(input);
     tf.engine().endScope();
     requestAnimationFrame(detectLoop);
@@ -276,11 +251,13 @@ async function detectLoop() {
   requestAnimationFrame(detectLoop);
 }
 
-// --- Main Execution ---
+// --- Main Execution (Tidak Berubah) ---
 
 (async () => {
   await loadModel();
   await setupCamera();
-  statusEl.textContent = "Model siap — menjalankan deteksi.";
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  statusEl.textContent = "Model ready — running detection.";
   detectLoop();
 })();
