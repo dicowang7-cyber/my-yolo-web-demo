@@ -8,7 +8,7 @@ const ctx = canvas.getContext("2d");
 async function loadModel() {
     console.log("Loading model...");
     model = await tf.loadGraphModel(MODEL_URL);
-    console.log("Model loaded");
+    console.log("Model loaded.");
 }
 
 async function setupCamera() {
@@ -23,68 +23,90 @@ async function setupCamera() {
     });
 }
 
+// Sigmoid
 function sigmoid(x) {
     return 1 / (1 + Math.exp(-x));
 }
 
-function decodeYOLO(output) {
-    // output shape: [1, 20, 8400]
-    const data = output.squeeze().transpose().arraySync(); // [8400, 20]
+// Convert xywh → xyxy
+function xywh2xyxy(x, y, w, h) {
+    return [
+        x - w / 2, // x1
+        y - h / 2, // y1
+        x + w / 2, // x2
+        y + h / 2  // y2
+    ];
+}
 
-    const boxes = [];
+// Decode YOLO output
+function decodeYOLO(tensor) {
+    const arr = tensor.squeeze().transpose().arraySync(); // [8400,20]
 
-    data.forEach(d => {
-        const [x, y, w, h] = d.slice(0, 4);
-        const obj = sigmoid(d[4]);
+    const results = [];
 
-        if (obj < 0.4) return; // threshold
+    for (let i = 0; i < arr.length; i++) {
+        const row = arr[i];
 
-        const classScores = d.slice(5);
+        const x = row[0];
+        const y = row[1];
+        const w = row[2];
+        const h = row[3];
+
+        const objConf = sigmoid(row[4]);
+        if (objConf < 0.4) continue;
+
+        const classScores = row.slice(5);
         const classId = classScores.indexOf(Math.max(...classScores));
 
-        const left = x - w / 2;
-        const top = y - h / 2;
+        const [x1, y1, x2, y2] = xywh2xyxy(x, y, w, h);
 
-        boxes.push({
-            x: left,
-            y: top,
-            width: w,
-            height: h,
-            score: obj,
-            classId: classId
+        results.push({
+            x1, y1, x2, y2,
+            score: objConf,
+            classId
         });
-    });
+    }
 
-    return boxes;
+    return results;
 }
 
 function drawBoxes(boxes) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.strokeStyle = "lime";
-    ctx.lineWidth = 3;
-    ctx.font = "18px Arial";
 
     boxes.forEach(b => {
-        ctx.strokeRect(b.x, b.y, b.width, b.height);
-        ctx.fillText((b.score * 100).toFixed(1) + "%", b.x, b.y - 5);
+        ctx.strokeStyle = "lime";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(
+            b.x1,
+            b.y1,
+            b.x2 - b.x1,
+            b.y2 - b.y1
+        );
+
+        ctx.fillStyle = "lime";
+        ctx.font = "18px Arial";
+        ctx.fillText((b.score * 100).toFixed(1) + "%", b.x1, b.y1 - 5);
     });
 }
 
-async function detectFrame() {
+async function detectLoop() {
     tf.engine().startScope();
 
-    const input = tf.browser.fromPixels(video)
-        .resizeNearestNeighbor([640, 640])
-        .expandDims(0)
-        .toFloat();
+    const input = tf.tidy(() =>
+        tf.browser.fromPixels(video)
+            .resizeBilinear([640, 640])
+            .div(255)
+            .expandDims(0)
+    );
 
-    const result = await model.executeAsync(input);
-    const boxes = decodeYOLO(result[0]);
+    const output = await model.executeAsync(input);
 
-    drawBoxes(boxes);
+    const detections = decodeYOLO(output[0]);
+    drawBoxes(detections);
 
     tf.engine().endScope();
-    requestAnimationFrame(detectFrame);
+
+    requestAnimationFrame(detectLoop);
 }
 
 (async () => {
@@ -94,5 +116,5 @@ async function detectFrame() {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
 
-    detectFrame();
+    detectLoop();
 })();
