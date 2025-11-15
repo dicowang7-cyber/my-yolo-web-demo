@@ -8,10 +8,31 @@ const ctx = canvas.getContext('2d');
 
 let model = null;
 const INPUT_SIZE = 640;    // Sesuai export YOLO (640x640)
-const SCORE_THRESHOLD = 0.1; // <--- DIATUR SANGAT RENDAH (0.1) UNTUK PENGUJIAN
+const SCORE_THRESHOLD = 0.1; // Tetap 0.1 untuk debugging
 const NMS_IOU = 0.45;
 const MAX_OUTPUT = 50;    // Max boxes returned by NMS
-const NUM_CLASSES = 16;   // Dihitung dari output model 20 - 4 koordinat = 16
+const NUM_CLASSES = 16;   
+
+// --- DEFINISI NAMA KELAS AKTUAL (16 Kelas) ---
+const CLASS_NAMES = [
+    "Alpukat",
+    "Anggur",
+    "Apel",
+    "Apel Hijau",
+    "Jeruk",
+    "Lemon",
+    "Mangga",
+    "Melon",
+    "Nanas",
+    "Pepaya",
+    "Pir",
+    "Pisang",
+    "Rambutan",
+    "Salak",
+    "Semangka",
+    "Stroberi"
+];
+// ------------------------------------------
 
 // --- Utility Functions ---
 
@@ -35,9 +56,20 @@ function xywh_to_xyxy(x, y, w, h) {
 }
 
 function drawBoxes(boxes) {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // --- PENGATURAN MIRRORING DAN GAMBAR VIDEO ---
+  
+  // 1. Simpan konteks asli
+  ctx.save();
+  
+  // 2. Terapkan transformasi mirroring horizontal (membalik tampilan)
+  ctx.scale(-1, 1);
+  ctx.translate(-canvas.width, 0);
+  
+  // 3. Gambar video frame (Sekarang terlihat normal/tidak terbalik)
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  
   boxes.forEach(b => {
-    // Scaling koordinat kotak dari 640x640 ke ukuran canvas/video
+    // Scaling koordinat kotak
     const x = b.x1 * (canvas.width / INPUT_SIZE);
     const y = b.y1 * (canvas.height / INPUT_SIZE);
     const w = (b.x2 - b.x1) * (canvas.width / INPUT_SIZE);
@@ -48,28 +80,41 @@ function drawBoxes(boxes) {
     ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 200));
     ctx.strokeRect(x, y, w, h);
 
-    // Label bg
-    const label = `Class ${b.classId} ${(b.score*100).toFixed(1)}%`;
+    // Label: Gambar Teks di Canvas yang sudah di-mirror
+    ctx.save(); // Simpan konteks yang sudah di-mirror
+    ctx.scale(-1, 1); // Balikkan lagi hanya untuk teks agar tidak terbalik di layar
+    
+    const className = CLASS_NAMES[b.classId] || `Unknown Class ${b.classId}`; // Ambil nama kelas
+    const label = `${className} ${(b.score*100).toFixed(1)}%`;
+    
     ctx.font = "18px Arial";
     const textW = ctx.measureText(label).width;
     const pad = 6;
+    
+    // Koordinat X label harus disesuaikan (dibalik)
+    const textX = -(x + textW + pad);
+    
+    // Label bg
     ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillRect(x, y - 22, textW + pad, 22);
+    ctx.fillRect(textX, y - 22, textW + pad, 22);
 
     // Text
     ctx.fillStyle = "lime";
-    ctx.fillText(label, x + 4, y - 6);
+    ctx.fillText(label, -(x + 4), y - 6);
+
+    ctx.restore(); // Kembalikan ke konteks canvas yang sudah di-mirror
   });
+  
+  // 4. Kembalikan konteks canvas ke kondisi awal (penting!)
+  ctx.restore(); 
 }
 
 // --- Post-Processing dengan Koreksi YOLOv8 dan Debugging ---
 
 async function postprocess(outputTensor) {
   // Model output shape: [1, 20, 8400] -> transpose -> [8400, 20]
-  // 20 = 4 (koordinat) + 16 (kelas)
   let t = outputTensor;
 
-  // Transpose dan konversi ke array JS
   const transposed = tf.tidy(() => t.squeeze().transpose()); // [8400, 20]
   const data = await transposed.array();
   transposed.dispose();
@@ -77,51 +122,44 @@ async function postprocess(outputTensor) {
   const boxes = [];
   const scores = [];
   const classIds = [];
-    
-    let maxOverallScore = 0; // Untuk debugging
+    
+    let maxOverallScore = 0; 
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
-    // row: [x, y, w, h, cls0, cls1, cls2, ..., cls15]
     
     const x = row[0];
     const y = row[1];
     const w = row[2];
     const h = row[3];
     
-    // Logit kelas dimulai dari index 4
-    const classLogits = row.slice(4); 
-    
+    const classLogits = row.slice(4); 
     const probs = softmax(classLogits);
     const maxProb = Math.max(...probs);
-    const classId = probs.indexOf(maxProb); 
+    const classId = probs.indexOf(maxProb); 
 
-    // Skor akhir adalah probabilitas kelas maksimum (koreksi YOLOv8)
-    const finalScore = maxProb; 
-    
-    if (finalScore > maxOverallScore) {
-        maxOverallScore = finalScore;
-    }
+    const finalScore = maxProb; 
+    
+    if (finalScore > maxOverallScore) {
+        maxOverallScore = finalScore;
+    }
 
-    if (finalScore < SCORE_THRESHOLD) continue; 
+    if (finalScore < SCORE_THRESHOLD) continue; 
 
     const [x1, y1, x2, y2] = xywh_to_xyxy(x, y, w, h);
 
-    // Simpan kotak dalam format [y1, x1, y2, x2] untuk NMS TFJS
-    boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]); 
+    boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]); 
     scores.push(finalScore);
-    classIds.push(classId); // Menyimpan ID kelas
+    classIds.push(classId); 
   }
 
-    // DEBUGGING: Cek skor tertinggi yang ditemukan
-    console.log(`Max class score found: ${maxOverallScore.toFixed(3)}`);
-    console.log(`Detections passing initial threshold (${SCORE_THRESHOLD}): ${boxes.length}`);
+    console.log(`Max class score found: ${maxOverallScore.toFixed(3)}`);
+    console.log(`Detections passing initial threshold (${SCORE_THRESHOLD}): ${boxes.length}`);
 
   if (boxes.length === 0) {
     return [];
   }
-  
-  // Run NMS (Non-Max Suppression)
+  
   const boxesTensor = tf.tensor2d(boxes);
   const scoresTensor = tf.tensor1d(scores);
   const selectedIdx = await tf.image.nonMaxSuppressionAsync(
@@ -131,12 +169,11 @@ async function postprocess(outputTensor) {
 
   const final = [];
   for (let idx of selected) {
-    // Ambil data dari array asli menggunakan indeks yang dipilih NMS
     const [y1,x1,y2,x2] = boxes[idx];
     final.push({
       x1: x1, y1: y1, x2: x2, y2: y2,
       score: scores[idx],
-      classId: classIds[idx] 
+      classId: classIds[idx] 
     });
   }
 
@@ -170,7 +207,6 @@ async function setupCamera() {
     video.srcObject = stream;
     await new Promise(resolve => video.onloadedmetadata = resolve);
     video.play();
-    // set canvas size to video display size
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
   } catch (err) {
@@ -186,13 +222,11 @@ async function detectLoop() {
 
   tf.engine().startScope();
 
-  // Preprocess: capture current frame, resize to INPUT_SIZE
   const input = tf.tidy(() => {
     const img = tf.browser.fromPixels(video);
     return img.resizeBilinear([INPUT_SIZE, INPUT_SIZE]).div(255.0).expandDims(0);
   });
 
-  // Model Inference
   let output = null;
   try {
     const res = await model.executeAsync(input);
@@ -213,10 +247,7 @@ async function detectLoop() {
 
   const detections = await postprocess(output);
 
-  // Gambar video frame sebagai latar belakang
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  // Gambar bounding boxes
+  // drawBoxes sekarang menangani drawing video dan mirroring
   drawBoxes(detections);
 
   tf.dispose([input, output]);
@@ -230,7 +261,6 @@ async function detectLoop() {
 (async () => {
   await loadModel();
   await setupCamera();
-  // pastikan canvas ukurannya sesuai dengan video
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   statusEl.textContent = "Model ready — running detection.";
