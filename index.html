@@ -1,62 +1,83 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>YOLO TFJS Realtime</title>
-
-  <style>
-    body {
-      margin: 0;
-      background: #111;
-      color: #fff;
-      font-family: Arial, sans-serif;
-      text-align: center;
-    }
-
-    h2 { margin: 16px 0; }
-
-    #container {
-      position: relative;
-      display: inline-block;
-    }
-
-    /* VIDEO tetap mirror agar natural */
-    #video {
-      width: 90vw;
-      max-width: 720px;
-      border-radius: 8px;
-      transform: scaleX(-1);
-    }
-
-    /* CANVAS tidak mirror */
-    #canvas {
-      position: absolute;
-      left: 0;
-      top: 0;
-      pointer-events: none;
-    }
-
-    #status {
-      margin: 8px 0 16px 0;
-      color: #9ad;
-    }
-  </style>
-
-  <!-- TensorFlow.js -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deteksi Objek | TensorFlow.js</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin: 0;
+            background-color: #f0f0f0;
+            padding: 20px;
+        }
+        #loading-container {
+            margin-bottom: 20px;
+            font-size: 1.2em;
+            text-align: center;
+        }
+        #video-container {
+            position: relative;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            background-color: #fff;
+        }
+        video, canvas {
+            display: block;
+        }
+        #webcam {
+            width: 640px; /* Sesuaikan ukuran video */
+            height: 480px;
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .detection-box {
+            position: absolute;
+            border: 2px solid #00ff44;
+            color: white;
+            font-size: 14px;
+            padding: 2px 5px;
+            text-shadow: 1px 1px 2px black;
+            font-weight: bold;
+            box-sizing: border-box;
+            background-color: rgba(0, 255, 68, 0.4); /* Background transparan */
+            pointer-events: none; /* Agar tidak menghalangi interaksi */
+            z-index: 10;
+        }
+        .detection-label {
+            position: absolute;
+            top: -20px;
+            left: 0;
+            white-space: nowrap;
+            background-color: #00ff44;
+            color: black;
+            padding: 1px 4px;
+            font-size: 12px;
+            z-index: 11;
+        }
+    </style>
 </head>
 <body>
 
-  <h2>YOLO Web Realtime Detection</h2>
-  <div id="status">Loading model...</div>
+    <h1>🚀 Deteksi Objek Kustom</h1>
 
-  <div id="container">
-    <video id="video" autoplay playsinline></video>
-    <canvas id="canvas"></canvas>
-  </div>
+    <div id="loading-container">
+        Memuat model: <span id="loading-percent">0%</span>
+    </div>
 
-  <script src="script.js"></script>
+    <div id="video-container" style="display: none;">
+        <video id="webcam" autoplay muted playsinline></video>
+        </div>
+
+    <script src="script.js"></script>
 
 </body>
 </html>
