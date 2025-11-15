@@ -5,6 +5,12 @@ const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+async function loadModel() {
+    console.log("Loading model...");
+    model = await tf.loadGraphModel(MODEL_URL);
+    console.log("Model loaded");
+}
+
 async function setupCamera() {
     const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" },
@@ -17,35 +23,64 @@ async function setupCamera() {
     });
 }
 
-async function loadModel() {
-    console.log("Loading model...");
-    model = await tf.loadGraphModel(MODEL_URL);
-    console.log("Model loaded.");
+function sigmoid(x) {
+    return 1 / (1 + Math.exp(-x));
 }
 
-function drawBoxes(predictions) {
+function decodeYOLO(output) {
+    // output shape: [1, 20, 8400]
+    const data = output.squeeze().transpose().arraySync(); // [8400, 20]
+
+    const boxes = [];
+
+    data.forEach(d => {
+        const [x, y, w, h] = d.slice(0, 4);
+        const obj = sigmoid(d[4]);
+
+        if (obj < 0.4) return; // threshold
+
+        const classScores = d.slice(5);
+        const classId = classScores.indexOf(Math.max(...classScores));
+
+        const left = x - w / 2;
+        const top = y - h / 2;
+
+        boxes.push({
+            x: left,
+            y: top,
+            width: w,
+            height: h,
+            score: obj,
+            classId: classId
+        });
+    });
+
+    return boxes;
+}
+
+function drawBoxes(boxes) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "lime";
+    ctx.lineWidth = 3;
+    ctx.font = "18px Arial";
 
-    predictions.forEach(box => {
-        const [x1, y1, x2, y2, score, classId] = box;
-
-        ctx.strokeStyle = "lime";
-        ctx.lineWidth = 3;
-        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-
-        ctx.fillStyle = "lime";
-        ctx.font = "18px Arial";
-        ctx.fillText(`${(score * 100).toFixed(1)}%`, x1, y1 - 5);
+    boxes.forEach(b => {
+        ctx.strokeRect(b.x, b.y, b.width, b.height);
+        ctx.fillText((b.score * 100).toFixed(1) + "%", b.x, b.y - 5);
     });
 }
 
 async function detectFrame() {
     tf.engine().startScope();
 
-    const input = tf.browser.fromPixels(video).expandDims(0).toFloat();
-    const preds = await model.executeAsync(input);
+    const input = tf.browser.fromPixels(video)
+        .resizeNearestNeighbor([640, 640])
+        .expandDims(0)
+        .toFloat();
 
-    const boxes = preds[0].arraySync(); // YOLO output shape (N, 6)
+    const result = await model.executeAsync(input);
+    const boxes = decodeYOLO(result[0]);
+
     drawBoxes(boxes);
 
     tf.engine().endScope();
