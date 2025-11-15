@@ -7,43 +7,11 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 
 let model = null;
-const INPUT_SIZE = 640;   // Sesuai export YOLO (640x640)
-const SCORE_THRESHOLD = 0.6; // <--- DIATUR KE 0.6 SESUAI PERMINTAAN
+const INPUT_SIZE = 640;    // Sesuai export YOLO (640x640)
+const SCORE_THRESHOLD = 0.6; // <--- DIATUR KE 0.6
 const NMS_IOU = 0.45;
 const MAX_OUTPUT = 50;    // Max boxes returned by NMS
-
-// --- Inisialisasi dan Setup ---
-
-async function loadModel() {
-  try {
-    statusEl.textContent = "Loading model...";
-    // Pastikan model yang dimuat adalah GraphModel
-    model = await tf.loadGraphModel(MODEL_URL);
-    statusEl.textContent = "Model loaded.";
-    console.log("Model loaded:", model);
-  } catch (err) {
-    console.error("Failed to load model:", err);
-    statusEl.textContent = "Failed to load model. Check console.";
-  }
-}
-
-async function setupCamera() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
-      audio: false
-    });
-    video.srcObject = stream;
-    await new Promise(resolve => video.onloadedmetadata = resolve);
-    video.play();
-    // set canvas size to video display size
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-  } catch (err) {
-    console.error("Camera error:", err);
-    statusEl.textContent = "Camera error. Allow camera and reload.";
-  }
-}
+const NUM_CLASSES = 16;   // Dihitung dari output model 20 - 4 koordinat = 16
 
 // --- Utility Functions ---
 
@@ -62,8 +30,6 @@ function xywh_to_xyxy(x, y, w, h) {
   const y2 = y + h/2;
   return [x1, y1, x2, y2];
 }
-
-// --- Drawing Function ---
 
 function drawBoxes(boxes) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -93,57 +59,59 @@ function drawBoxes(boxes) {
   });
 }
 
-// --- Post-Processing dengan Perbaikan Class ID ---
+// --- Post-Processing dengan Koreksi YOLOv8 ---
 
 async function postprocess(outputTensor) {
-  // Asumsi bentuk output model: [1, 20, 8400] (contoh YOLOv8 15 classes)
+  // Model output shape: [1, 20, 8400] -> transpose -> [8400, 20]
+  // 20 = 4 (kotak) + 16 (kelas)
   let t = outputTensor;
 
   // Transpose dan konversi ke array JS
   const transposed = tf.tidy(() => t.squeeze().transpose()); // [8400, 20]
-  const data = await transposed.array(); // array of length 8400 each length 20
+  const data = await transposed.array();
   transposed.dispose();
 
   const boxes = [];
   const scores = [];
-  const classIds = []; // <--- Array untuk menyimpan ID kelas
+  const classIds = [];
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
-    // row: [x, y, w, h, obj_conf, cls0, cls1, ...]
+    // row: [x, y, w, h, cls0, cls1, cls2, ..., cls15]
     
     const x = row[0];
     const y = row[1];
     const w = row[2];
     const h = row[3];
-    const objLogit = row[4];
-    const objConf = sigmoid(objLogit);
     
-    if (objConf < SCORE_THRESHOLD) continue;
-
-    const classLogits = row.slice(5);
+    // Di YOLOv8, logit kelas dimulai dari index 4. Tidak ada obj_conf terpisah.
+    const classLogits = row.slice(4); 
+    
+    // Terapkan Softmax untuk mendapatkan probabilitas kelas
     const probs = softmax(classLogits);
     const maxProb = Math.max(...probs);
-    const classId = probs.indexOf(maxProb); // ID kelas yang benar
+    const classId = probs.indexOf(maxProb); 
 
-    const finalScore = objConf * maxProb;
-    if (finalScore < SCORE_THRESHOLD) continue;
+    // Skor akhir adalah probabilitas kelas maksimum
+    const finalScore = maxProb; 
+
+    if (finalScore < SCORE_THRESHOLD) continue; 
 
     const [x1, y1, x2, y2] = xywh_to_xyxy(x, y, w, h);
 
     // Simpan kotak dalam format [y1, x1, y2, x2] untuk NMS TFJS
     boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]); 
     scores.push(finalScore);
-    classIds.push(classId); // <--- Menyimpan ID kelas
-
+    classIds.push(classId); // Menyimpan ID kelas
   }
 
   if (boxes.length === 0) {
+    //console.log("No detections found above threshold", SCORE_THRESHOLD);
     return [];
   }
-
-  // Run NMS to filter boxes
-  const boxesTensor = tf.tensor2d(boxes); // shape [num, 4]
+  
+  // Run NMS (Non-Max Suppression)
+  const boxesTensor = tf.tensor2d(boxes);
   const scoresTensor = tf.tensor1d(scores);
   const selectedIdx = await tf.image.nonMaxSuppressionAsync(
     boxesTensor, scoresTensor, MAX_OUTPUT, NMS_IOU, SCORE_THRESHOLD
@@ -157,7 +125,7 @@ async function postprocess(outputTensor) {
     final.push({
       x1: x1, y1: y1, x2: x2, y2: y2,
       score: scores[idx],
-      classId: classIds[idx] // <--- Mengambil ID kelas yang tersimpan
+      classId: classIds[idx] // Mengambil ID kelas yang tersimpan
     });
   }
 
@@ -166,6 +134,38 @@ async function postprocess(outputTensor) {
   selectedIdx.dispose();
 
   return final;
+}
+
+// --- Inisialisasi dan Setup ---
+
+async function loadModel() {
+  try {
+    statusEl.textContent = "Loading model...";
+    model = await tf.loadGraphModel(MODEL_URL);
+    statusEl.textContent = "Model loaded.";
+    console.log("Model loaded:", model);
+  } catch (err) {
+    console.error("Failed to load model:", err);
+    statusEl.textContent = "Failed to load model. Check console.";
+  }
+}
+
+async function setupCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "environment" },
+      audio: false
+    });
+    video.srcObject = stream;
+    await new Promise(resolve => video.onloadedmetadata = resolve);
+    video.play();
+    // set canvas size to video display size
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+  } catch (err) {
+    console.error("Camera error:", err);
+    statusEl.textContent = "Camera error. Allow camera and reload.";
+  }
 }
 
 // --- Detection Loop ---
@@ -202,7 +202,7 @@ async function detectLoop() {
 
   const detections = await postprocess(output);
 
-  // Gambar video frame sebagai latar belakang
+  // Gambar video frame sebagai latar belakang (penting agar deteksi di atas video)
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   // Gambar bounding boxes
