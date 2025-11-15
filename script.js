@@ -1,4 +1,4 @@
-// Ganti kalau perlu, tapi pakai URL model.json yang sudah ada di Vercel
+// Anda harus mengganti URL ini dengan lokasi model.json Anda yang sebenarnya
 const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
 
 const statusEl = document.getElementById('status');
@@ -8,7 +8,7 @@ const ctx = canvas.getContext('2d');
 
 let model = null;
 const INPUT_SIZE = 640;    // Sesuai export YOLO (640x640)
-const SCORE_THRESHOLD = 0.6; // <--- DIATUR KE 0.6
+const SCORE_THRESHOLD = 0.1; // <--- DIATUR SANGAT RENDAH (0.1) UNTUK PENGUJIAN
 const NMS_IOU = 0.45;
 const MAX_OUTPUT = 50;    // Max boxes returned by NMS
 const NUM_CLASSES = 16;   // Dihitung dari output model 20 - 4 koordinat = 16
@@ -16,6 +16,8 @@ const NUM_CLASSES = 16;   // Dihitung dari output model 20 - 4 koordinat = 16
 // --- Utility Functions ---
 
 function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+
+// Fungsi Softmax untuk mengkonversi logit kelas menjadi probabilitas
 function softmax(arr) {
   const max = Math.max(...arr);
   const exps = arr.map(v => Math.exp(v - max));
@@ -23,6 +25,7 @@ function softmax(arr) {
   return exps.map(e => e / sum);
 }
 
+// Konversi format box dari [center_x, center_y, width, height] ke [x1, y1, x2, y2]
 function xywh_to_xyxy(x, y, w, h) {
   const x1 = x - w/2;
   const y1 = y - h/2;
@@ -34,7 +37,7 @@ function xywh_to_xyxy(x, y, w, h) {
 function drawBoxes(boxes) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   boxes.forEach(b => {
-    // Koordinat kotak diskalakan dari 640x640 ke ukuran canvas/video
+    // Scaling koordinat kotak dari 640x640 ke ukuran canvas/video
     const x = b.x1 * (canvas.width / INPUT_SIZE);
     const y = b.y1 * (canvas.height / INPUT_SIZE);
     const w = (b.x2 - b.x1) * (canvas.width / INPUT_SIZE);
@@ -59,11 +62,11 @@ function drawBoxes(boxes) {
   });
 }
 
-// --- Post-Processing dengan Koreksi YOLOv8 ---
+// --- Post-Processing dengan Koreksi YOLOv8 dan Debugging ---
 
 async function postprocess(outputTensor) {
   // Model output shape: [1, 20, 8400] -> transpose -> [8400, 20]
-  // 20 = 4 (kotak) + 16 (kelas)
+  // 20 = 4 (koordinat) + 16 (kelas)
   let t = outputTensor;
 
   // Transpose dan konversi ke array JS
@@ -74,6 +77,8 @@ async function postprocess(outputTensor) {
   const boxes = [];
   const scores = [];
   const classIds = [];
+    
+    let maxOverallScore = 0; // Untuk debugging
 
   for (let i = 0; i < data.length; i++) {
     const row = data[i];
@@ -84,16 +89,19 @@ async function postprocess(outputTensor) {
     const w = row[2];
     const h = row[3];
     
-    // Di YOLOv8, logit kelas dimulai dari index 4. Tidak ada obj_conf terpisah.
+    // Logit kelas dimulai dari index 4
     const classLogits = row.slice(4); 
     
-    // Terapkan Softmax untuk mendapatkan probabilitas kelas
     const probs = softmax(classLogits);
     const maxProb = Math.max(...probs);
     const classId = probs.indexOf(maxProb); 
 
-    // Skor akhir adalah probabilitas kelas maksimum
+    // Skor akhir adalah probabilitas kelas maksimum (koreksi YOLOv8)
     const finalScore = maxProb; 
+    
+    if (finalScore > maxOverallScore) {
+        maxOverallScore = finalScore;
+    }
 
     if (finalScore < SCORE_THRESHOLD) continue; 
 
@@ -105,8 +113,11 @@ async function postprocess(outputTensor) {
     classIds.push(classId); // Menyimpan ID kelas
   }
 
+    // DEBUGGING: Cek skor tertinggi yang ditemukan
+    console.log(`Max class score found: ${maxOverallScore.toFixed(3)}`);
+    console.log(`Detections passing initial threshold (${SCORE_THRESHOLD}): ${boxes.length}`);
+
   if (boxes.length === 0) {
-    //console.log("No detections found above threshold", SCORE_THRESHOLD);
     return [];
   }
   
@@ -125,7 +136,7 @@ async function postprocess(outputTensor) {
     final.push({
       x1: x1, y1: y1, x2: x2, y2: y2,
       score: scores[idx],
-      classId: classIds[idx] // Mengambil ID kelas yang tersimpan
+      classId: classIds[idx] 
     });
   }
 
@@ -136,7 +147,7 @@ async function postprocess(outputTensor) {
   return final;
 }
 
-// --- Inisialisasi dan Setup ---
+// --- Inisialisasi dan Setup Kamera/Model ---
 
 async function loadModel() {
   try {
@@ -202,7 +213,7 @@ async function detectLoop() {
 
   const detections = await postprocess(output);
 
-  // Gambar video frame sebagai latar belakang (penting agar deteksi di atas video)
+  // Gambar video frame sebagai latar belakang
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   // Gambar bounding boxes
@@ -219,7 +230,7 @@ async function detectLoop() {
 (async () => {
   await loadModel();
   await setupCamera();
-  // ensure canvas matches the displayed video size
+  // pastikan canvas ukurannya sesuai dengan video
   canvas.width = video.videoWidth;
   canvas.height = video.videoHeight;
   statusEl.textContent = "Model ready — running detection.";
