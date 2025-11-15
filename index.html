@@ -1,43 +1,26 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TensorFlow.js Model Loader</title>
-
-  <!-- Load TensorFlow.js -->
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.19.0/dist/tf.min.js"></script>
-
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 20px;
-    }
-
-    #preview {
-      max-width: 300px;
-      margin-top: 10px;
-      border-radius: 6px;
-    }
-
-    .loading {
-      color: blue;
-      font-weight: bold;
-    }
-  </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YOLO Real-Time Detection</title>
+    <style>
+        body { font-family: Arial; text-align: center; background: #111; color: #fff; }
+        #video { width: 90%; max-width: 500px; border-radius: 10px; }
+        #canvas { position: absolute; top: 0; left: 0; }
+        #container { position: relative; display: inline-block; }
+    </style>
 </head>
-
 <body>
-  <h2>TensorFlow.js Model Loader</h2>
 
-  <p>Status: <span id="status">Loading model...</span></p>
+<h2>YOLO Web Realtime Detection</h2>
 
-  <input type="file" id="imgInput" accept="image/*" />
-  <br />
-  <img id="preview" />
+<div id="container">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+</div>
 
-  <pre id="result"></pre>
-
-  <script src="script.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
+<script src="script.js"></script>
 </body>
 </html>
