@@ -1,55 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>YOLO Realtime Web</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>YOLO TFJS Realtime</title>
 
-    <style>
-        body {
-            margin: 0;
-            background: #111;
-            color: white;
-            text-align: center;
-            font-family: Arial;
-        }
+  <style>
+    body { margin: 0; background: #111; color: #fff; font-family: Arial, sans-serif; text-align: center; }
+    h2 { margin: 16px 0; }
+    #container { position: relative; display: inline-block; }
+    #video { width: 90vw; max-width: 720px; border-radius: 8px; transform: scaleX(-1); /* mirror for user */ }
+    #canvas { position: absolute; left: 0; top: 0; pointer-events: none; transform: scaleX(-1); }
+    #status { margin: 8px 0 16px 0; color: #9ad; }
+  </style>
 
-        h2 {
-            margin-top: 20px;
-        }
-
-        #container {
-            position: relative;
-            display: inline-block;
-        }
-
-        #video {
-            width: 90vw;
-            max-width: 600px;
-            border-radius: 8px;
-        }
-
-        #canvas {
-            position: absolute;
-            left: 0;
-            top: 0;
-        }
-    </style>
-
-    <!-- TensorFlow.js -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
 </head>
-
 <body>
+  <h2>YOLO Web Realtime Detection</h2>
+  <div id="status">Loading model...</div>
 
-<h2>YOLO Web Realtime Detection</h2>
-
-<div id="container">
+  <div id="container">
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas"></canvas>
-</div>
+  </div>
 
-<script src="script.js"></script>
-
+  <script src="script.js"></script>
 </body>
 </html>
