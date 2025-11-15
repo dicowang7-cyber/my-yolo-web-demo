@@ -6,19 +6,48 @@
   <title>YOLO TFJS Realtime</title>
 
   <style>
-    body { margin: 0; background: #111; color: #fff; font-family: Arial, sans-serif; text-align: center; }
+    body { 
+      margin: 0; 
+      background: #111; 
+      color: #fff; 
+      font-family: Arial, sans-serif; 
+      text-align: center;
+    }
+
     h2 { margin: 16px 0; }
-    #container { position: relative; display: inline-block; }
-    #video { width: 90vw; max-width: 720px; border-radius: 8px; transform: scaleX(-1); /* mirror for user */ }
-    #canvas { position: absolute; left: 0; top: 0; pointer-events: none; transform: scaleX(-1); }
-    #status { margin: 8px 0 16px 0; color: #9ad; }
+
+    #container { 
+      position: relative; 
+      display: inline-block;
+    }
+
+    /* Video tetap MIRROR */
+    #video { 
+      width: 90vw; 
+      max-width: 720px; 
+      border-radius: 8px;
+      transform: scaleX(-1); 
+    }
+
+    /* Canvas NORMAL (tidak mirror!) */
+    #canvas { 
+      position: absolute; 
+      left: 0; 
+      top: 0; 
+      pointer-events: none; 
+    }
+
+    #status { 
+      margin: 8px 0 16px 0; 
+      color: #9ad; 
+    }
   </style>
 
-  <!-- TensorFlow.js -->
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
 </head>
 <body>
   <h2>YOLO Web Realtime Detection</h2>
+  
   <div id="status">Loading model...</div>
 
   <div id="container">
