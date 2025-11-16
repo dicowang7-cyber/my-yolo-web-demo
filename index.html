@@ -6,46 +6,17 @@
     <title>YOLOv8 Web Realtime Detection (Smooth Camera)</title>
     <style>
         body {
-            background-color: #1e1e1e;
-            color: #ffffff;
-            font-family: Arial, sans-serif;
-            margin: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 20px;
+            background-color: #1e1e1e; color: #ffffff; font-family: Arial, sans-serif; margin: 0;
+            display: flex; flex-direction: column; align-items: center; padding: 20px;
         }
-        h1 {
-            color: #ffffff;
-            font-size: 2em;
-            margin-bottom: 10px;
-        }
-        #status-container {
-            margin-bottom: 20px;
-            font-size: 1.1em;
-            color: #b0b0b0;
-            text-align: center;
-        }
-        #status {
-            color: lime;
-            font-weight: bold;
-        }
-        /* Style untuk progress bar, video, canvas tetap sama */
-        #progress-bar {
-            width: 300px; height: 10px; background-color: #555; margin-top: 5px; border-radius: 5px; overflow: hidden; display: none;
-        }
-        #progress-fill {
-            height: 100%; width: 0%; background-color: lime; transition: width 0.3s;
-        }
-        #video-container {
-            position: relative; width: 640px; height: 480px; overflow: hidden; border: 3px solid #333; border-radius: 8px;
-        }
-        #canvas {
-            position: absolute; top: 0; left: 0; z-index: 10;
-        }
-        #video {
-            visibility: hidden; position: absolute;
-        }
+        h1 { color: #ffffff; font-size: 2em; margin-bottom: 10px; }
+        #status-container { margin-bottom: 20px; font-size: 1.1em; color: #b0b0b0; text-align: center; }
+        #status { color: lime; font-weight: bold; }
+        #progress-bar { width: 300px; height: 10px; background-color: #555; margin-top: 5px; border-radius: 5px; overflow: hidden; display: none; }
+        #progress-fill { height: 100%; width: 0%; background-color: lime; transition: width 0.3s; }
+        #video-container { position: relative; width: 640px; height: 480px; overflow: hidden; border: 3px solid #333; border-radius: 8px; }
+        #canvas { position: absolute; top: 0; left: 0; z-index: 10; }
+        #video { visibility: hidden; position: absolute; }
     </style>
 </head>
 <body>
@@ -65,6 +36,8 @@
     </div>
 
     <script>
+        const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
+        const INPUT_SIZE = 640; // Ukuran input model Anda
         const statusEl = document.getElementById('status');
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
@@ -73,15 +46,15 @@
         const progressFill = document.getElementById('progress-fill');
         const fpsInfoEl = document.getElementById('fps-info');
 
-        // --- KONFIGURASI ---
+        // --- KONFIGURASI INFERENSI ---
         const INFERENCE_FPS = 10; // Target inferensi (misalnya 10 FPS)
         const MS_PER_INFERENCE = 1000 / INFERENCE_FPS; // Waktu minimum antar inferensi (100ms)
         let lastInferenceTime = 0;
         let worker;
+        let detectionsCache = []; // Menyimpan hasil deteksi terakhir
 
-        // --- MIRRORING VIDEO (Hanya Rendering Frame Kamera) ---
+        // --- DRAWING DAN RENDERING ---
 
-        // Menggambar video dan hasil deteksi ke canvas
         function drawFrame(boxes = []) {
             // 1. Gambar frame video dengan MIRRORING
             ctx.save();
@@ -92,17 +65,12 @@
 
             // 2. Gambar deteksi
             boxes.forEach(b => {
-                // Skala koordinat dari ukuran model (640) ke ukuran canvas
-                const scaledX1 = b.x1 * (canvas.width / 640);
-                const scaledX2 = b.x2 * (canvas.width / 640);
-                const scaledY1 = b.y1 * (canvas.height / 640);
-                const scaledY2 = b.y2 * (canvas.height / 640);
-                
-                // Terapkan formula MIRRORING ke koordinat X deteksi
-                const x = canvas.width - scaledX2; 
-                const y = scaledY1;
-                const w = scaledX2 - scaledX1;
-                const h = scaledY2 - scaledY1;
+                // Skala koordinat dari normalisasi (0-1) ke ukuran pixel canvas
+                // b.x1, b.y1, dll. berasal dari Worker dan sudah dinormalisasi (0-1)
+                const x = (canvas.width * (1 - b.x2)); // Koreksi Mirroring X1
+                const y = canvas.height * b.y1;
+                const w = canvas.width * (b.x2 - b.x1);
+                const h = canvas.height * (b.y2 - b.y1);
                 
                 // Box
                 ctx.strokeStyle = "lime";
@@ -125,27 +93,25 @@
             });
         }
 
-        let detectionsCache = []; // Menyimpan hasil deteksi terakhir
-
-        // --- Main Animation Loop (HARUS SMOOTH) ---
+        // --- MAIN ANIMATION LOOP (RequestAnimationFrame) ---
         function animationLoop(now) {
-            // Gambar frame terbaru kamera
+            // Ini berjalan secepat mungkin (60+ FPS) untuk smoothness kamera
             drawFrame(detectionsCache); 
 
-            // Cek apakah sudah waktunya menjalankan inferensi lagi
+            // Cek apakah sudah waktunya menjalankan inferensi
             if (now - lastInferenceTime > MS_PER_INFERENCE && worker) {
                 
                 // Ambil data gambar dari canvas (GPU-accelerated jika WebGL)
+                // Note: Gunakan canvas.toDataURL atau createImageBitmap jika imageData terlalu lambat
                 const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 
-                // Kirim data pixel ke Web Worker untuk inferensi.
-                // Menggunakan Transferable Objects (imageData.data.buffer) untuk kecepatan maksimum
+                // Kirim data pixel ke Web Worker untuk inferensi (Transferable Objects)
                 worker.postMessage({
                     type: 'INFER',
                     imageData: imageData.data.buffer,
                     width: canvas.width,
                     height: canvas.height
-                }, [imageData.data.buffer]); // Transfer buffer ownership
+                }, [imageData.data.buffer]); // Transfer ownership (cepat)
                 
                 lastInferenceTime = now;
             }
@@ -153,9 +119,8 @@
             requestAnimationFrame(animationLoop);
         }
 
-        // --- Setup Worker dan Listener ---
+        // --- SETUP WORKER DAN LISTENER ---
         function setupWorker() {
-            // Inisialisasi Web Worker
             worker = new Worker('yolo-worker.js');
 
             worker.onmessage = (event) => {
@@ -168,29 +133,28 @@
                 } else if (data.type === 'LOADED') {
                     progressBar.style.display = 'none';
                     statusEl.textContent = "Model ready — running detection.";
-                    console.log("Worker ready: Model loaded.");
                 } else if (data.type === 'ERROR') {
                     statusEl.textContent = `Worker Error: ${data.message}`;
                     console.error("Worker Error:", data.message);
                 } else if (data.type === 'RESULT') {
-                    // Update deteksi, ini akan digunakan di drawFrame() pada frame berikutnya
+                    // Simpan hasil deteksi terbaru
                     detectionsCache = data.boxes; 
                     
-                    // Tampilkan FPS Inferensi (opsional)
-                    fpsInfoEl.textContent = `Inferensi: ${data.fps.toFixed(1)} FPS`;
+                    // Tampilkan FPS Inferensi (berapa cepat model memproses)
+                    fpsInfoEl.textContent = `Inferensi: ${data.fps.toFixed(1)} FPS | Detections: ${data.boxes.length}`;
                 }
             };
 
-            // Kirim konfigurasi awal ke worker
+            // Kirim konfigurasi awal
             worker.postMessage({
                 type: 'INIT',
-                modelUrl: "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json"
+                modelUrl: MODEL_URL,
+                inputSize: INPUT_SIZE
             });
         }
 
-        // --- Setup Kamera ---
+        // --- SETUP KAMERA ---
         async function setupCamera() {
-            // ... (Kode setupCamera sama seperti yang Anda miliki)
             try {
                 // Menggunakan 'user' (kamera depan) untuk mempermudah mirroring
                 const stream = await navigator.mediaDevices.getUserMedia({
@@ -218,10 +182,7 @@
 
         // --- Main Execution ---
         (async () => {
-            // 1. Siapkan Worker
             setupWorker();
-            
-            // 2. Siapkan Kamera
             await setupCamera();
         })();
     </script>
