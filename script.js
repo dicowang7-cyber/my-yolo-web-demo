@@ -2,12 +2,15 @@
 const MODEL_URL = 'https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json';
 const INPUT_SIZE = 640;
 const CLASSES = ["Alpukat", "Anggur", "Apel", "Apel Hijau", "Jeruk", "Lemon", "Mangga", "Melon", "Nanas", "Pepaya", "Pir", "Pisang", "Rambutan", "Salak", "Semangka", "Stroberi"];
+const CONF_THRESHOLD = 0.25; // Ambang batas kepercayaan deteksi minimal
+const IOU_THRESHOLD = 0.45; // Ambang batas IoU untuk Non-Maximum Suppression (NMS)
 
 const video = document.getElementById('webcam');
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const statusDiv = document.getElementById('status');
 const fpsSpan = document.getElementById('fps');
+const classCountSpan = document.getElementById('class-count');
 
 let model;
 let lastTime = 0;
@@ -18,20 +21,26 @@ let frameCount = 0;
  */
 async function setupWebcam() {
     return new Promise((resolve, reject) => {
-        const navigatorAny = navigator;
-        navigator.getUserMedia = navigator.getUserMedia ||
-            navigatorAny.webkitGetUserMedia || navigatorAny.mozGetUserMedia ||
-            navigatorAny.msGetUserMedia;
+        const videoConstraints = {
+            video: {
+                width: { exact: INPUT_SIZE },
+                height: { exact: INPUT_SIZE }
+            }
+        };
 
-        if (navigator.getUserMedia) {
-            navigator.getUserMedia(
-                { video: { width: INPUT_SIZE, height: INPUT_SIZE } },
-                stream => {
+        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+            navigator.mediaDevices.getUserMedia(videoConstraints)
+                .then(stream => {
                     video.srcObject = stream;
                     video.addEventListener('loadeddata', () => resolve(video), { once: true });
-                },
-                error => reject(error)
-            );
+                })
+                .catch(error => reject(new Error(`Akses kamera ditolak atau gagal: ${error.name}`)));
+        } else if (navigator.getUserMedia) {
+            // Fallback untuk browser lama
+            navigator.getUserMedia(videoConstraints, stream => {
+                video.srcObject = stream;
+                video.addEventListener('loadeddata', () => resolve(video), { once: true });
+            }, error => reject(error));
         } else {
             reject(new Error("Webcam tidak didukung di browser ini."));
         }
@@ -46,7 +55,7 @@ async function loadModel() {
         statusDiv.innerHTML = "Memuat model...";
         model = await tf.loadGraphModel(MODEL_URL);
 
-        // Warmup model untuk inisialisasi GPU dan alokasi memori
+        // Warmup model
         const dummyInput = tf.zeros([1, INPUT_SIZE, INPUT_SIZE, 3]);
         await model.executeAsync(dummyInput);
         dummyInput.dispose();
@@ -58,6 +67,113 @@ async function loadModel() {
         statusDiv.innerHTML = `Gagal memuat model: ${e.message}`;
         console.error("Gagal memuat model", e);
     }
+}
+
+/**
+ * Menggambar bounding box dan label pada canvas.
+ */
+function drawDetections(detections) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    detections.forEach(d => {
+        const [x1, y1, x2, y2, score, classId] = d;
+        const className = CLASSES[classId];
+
+        // Koordinat untuk canvas (diskalakan dari 640x640)
+        const x = x1;
+        const y = y1;
+        const width = x2 - x1;
+        const height = y2 - y1;
+
+        // Gambar Bounding Box
+        ctx.strokeStyle = '#FF5722'; // Warna kotak
+        ctx.lineWidth = 3;
+        ctx.strokeRect(x, y, width, height);
+
+        // Gambar Background Label
+        const text = `${className} ${(score * 100).toFixed(1)}%`;
+        ctx.font = 'bold 14px Arial';
+        const textMetrics = ctx.measureText(text);
+        const textWidth = textMetrics.width;
+        const textHeight = 16; 
+        
+        ctx.fillStyle = '#4CAF50'; // Warna background label
+        ctx.fillRect(x, y - textHeight - 4, textWidth + 8, textHeight + 4);
+
+        // Gambar Teks Label
+        ctx.fillStyle = '#FFFFFF'; // Warna teks
+        ctx.fillText(text, x + 4, y - 4);
+    });
+}
+
+/**
+ * Memproses output tensor dari model YOLOv8 (Non-Maximum Suppression dan konversi koordinat).
+ * Output model: [1, 8400, 20] -> [batch, boxes, (4+16)] (4 box coords, 1 confidence, 15 classes)
+ */
+async function processOutput(predictions) {
+    if (!predictions || predictions.length === 0) return [];
+    
+    // Asumsi predictions[0] adalah output tensor utama [1, 8400, 20]
+    const outputTensor = predictions[0];
+    const data = outputTensor.squeeze().arraySync(); // Bentuk [8400, 20]
+
+    let boxes = [];
+    let scores = [];
+    let classIds = [];
+    
+    // Perhatikan: Output YOLOv8 TFJS GraphModel seringkali memiliki format: 
+    // [Bounding Box (4), Confidence Skor (1), Class Scores (N)] 
+    // ATAU [Bounding Box (4), Class Scores (N), Confidence Skor (1)]
+
+    // Berdasarkan file metadata Anda yang menyarankan output [1, 8400, 20] (4 box + 16 classes)
+    // Format yang umum untuk YOLOv8 di TFJS adalah: [box_x, box_y, box_w, box_h, class_scores...]
+    
+    data.forEach(row => {
+        const [cx, cy, w, h] = row.slice(0, 4); // Koordinat Center, Width, Height
+        const classScores = row.slice(4); // Skor untuk 16 kelas
+
+        // Temukan kelas dengan skor tertinggi
+        const maxScore = Math.max(...classScores);
+        const classId = classScores.indexOf(maxScore);
+        
+        // Skor deteksi adalah MAX(Class Score)
+        const score = maxScore; 
+
+        if (score >= CONF_THRESHOLD) {
+            // Konversi dari format center-width-height (cx, cy, w, h) ke format sudut (x1, y1, x2, y2)
+            const x1 = cx - w / 2;
+            const y1 = cy - h / 2;
+            const x2 = cx + w / 2;
+            const y2 = cy + h / 2;
+            
+            // Konversi ke koordinat tampilan 640x640 (tidak perlu scaling jika input=output size)
+            // Jika model sudah menghasilkan koordinat 640x640, tidak perlu scaling lagi.
+            
+            boxes.push([x1, y1, x2, y2]);
+            scores.push(score);
+            classIds.push(classId);
+        }
+    });
+    
+    // Non-Maximum Suppression (NMS) untuk menghilangkan kotak yang tumpang tindih
+    const nms = await tf.image.nonMaxSuppressionAsync(
+        tf.tensor2d(boxes), 
+        tf.tensor1d(scores), 
+        100, // maxBoxes
+        IOU_THRESHOLD, 
+        CONF_THRESHOLD
+    );
+    
+    const selectedIndices = nms.dataSync();
+    
+    const finalDetections = selectedIndices.map(i => {
+        return [...boxes[i], scores[i], classIds[i]];
+    });
+    
+    // Pembersihan memori tensor
+    nms.dispose();
+    
+    return finalDetections;
 }
 
 /**
@@ -80,43 +196,19 @@ function detectFrame(timestamp) {
     }
 
     // 1. Dapatkan frame video
-    // tf.tidy memastikan memori tensor yang tidak perlu dibersihkan
     tf.tidy(() => {
         const tensor = tf.browser.fromPixels(video)
-            .resizeNearestNeighbor([INPUT_SIZE, INPUT_SIZE]) // Ubah ukuran ke input model
-            .div(255.0) // Normalisasi
-            .expandDims(0); // Tambahkan dimensi batch
+            .resizeNearestNeighbor([INPUT_SIZE, INPUT_SIZE])
+            .div(255.0)
+            .expandDims(0); 
 
         // 2. Lakukan Prediksi (asumsi asynchronous untuk model graph/frozen)
         model.executeAsync(tensor).then(predictions => {
-            // 3. Proses Prediksi dan Gambar Bounding Box
-            // *** Bagian ini sangat bergantung pada struktur output model YOLOv8 Anda! ***
-            // Anda perlu logic untuk mem-parsing output, menerapkan NMS, dan memetakan ke koordinat.
-            
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Contoh Sederhana (Ganti dengan logika NMS dan Bounding Box yang benar)
-            // Asumsi predictions[0] adalah tensor bounding box dan scores
-            if (predictions && predictions.length > 0) {
-                const outputData = predictions[0].dataSync(); // Ambil data
-                
-                // Placeholder untuk hasil deteksi
-                const detections = [];
-                // Logika placeholder: Ambil hasil prediksi (ganti dengan NMS yang benar)
-                // for (let i = 0; i < outputData.length; i += 6) { 
-                //    const [boxX, boxY, boxW, boxH, conf, classId] = outputData.slice(i, i+6);
-                //    if (conf > 0.5) detections.push({boxX, boxY, boxW, boxH, classId});
-                // }
-                
-                // Deteksi placeholder (ganti dengan logika model Anda)
-                // Untuk contoh visualisasi:
-                ctx.font = 'bold 16px Arial';
-                ctx.fillStyle = '#FF5722';
-                ctx.fillText(`Deteksi aktif! (Logic NMS perlu diimplementasi)`, 10, 30);
-                
-                // Update jumlah deteksi (Contoh: selalu 1 jika aktif)
-                document.getElementById('class-count').textContent = `Total Deteksi: 1`;
-            }
+            // 3. Proses Prediksi, Terapkan NMS, dan Gambar Bounding Box
+            processOutput(predictions).then(detections => {
+                drawDetections(detections);
+                classCountSpan.textContent = `Total Deteksi: ${detections.length}`;
+            });
             
             // Pembersihan memori tensor prediksi
             predictions.forEach(t => t.dispose());
