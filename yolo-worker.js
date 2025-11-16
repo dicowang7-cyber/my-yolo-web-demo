@@ -2,56 +2,46 @@
 importScripts('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js');
 
 let model = null;
-let MODEL_URL;
 let INPUT_SIZE;
+let SCORE_THRESHOLD;
+let NMS_IOU;
+let MAX_OUTPUT;
+let NUM_CLASSES;
+let CLASS_NAMES;
 
-// --- KONSTANTA & KONFIGURASI ---
-const SCORE_THRESHOLD = 0.1; 
-const NMS_IOU = 0.45;
-const MAX_OUTPUT = 50;
-const NUM_CLASSES = 16; 
-
-// DEFINISI NAMA KELAS AKTUAL
-const CLASS_NAMES = [
-    "Alpukat", "Anggur", "Apel", "Apel Hijau", "Jeruk", "Lemon", "Mangga", "Melon", 
-    "Nanas", "Pepaya", "Pir", "Pisang", "Rambutan", "Salak", "Semangka", "Stroberi" 
-];
-
-
-// --- POST-PROCESSING KRITIS (Koreksi Bounding Box) ---
+// --- POST-PROCESSING KRITIS (YOLOv8 Fixed) ---
 
 async function postprocess(outputTensor) {
     let results = [];
     
     const [finalBoxes, finalScores, finalClassIds] = tf.tidy(() => {
         
-        // Output dari model: [1, 20, 8400] -> Transpose menjadi: [8400, 20]
+        // Output: [1, 20, 8400] -> Transpose menjadi: [8400, 20]
         const transposed = outputTensor.squeeze([0]).transpose([1, 0]);
 
         // 1. Pisahkan Bounding Box (4) dan Class Logits (16)
-        const boxes = transposed.slice([0, 0], [-1, 4]); // [8400, 4] (x, y, w, h)
-        const classScores = transposed.slice([0, 4], [-1, NUM_CLASSES]); // [8400, 16] (Logits Kelas)
+        // YOLOv8 standar: 4 Box + N Kelas
+        const boxes = transposed.slice([0, 0], [-1, 4]); 
+        const classScores = transposed.slice([0, 4], [-1, NUM_CLASSES]); 
 
-        // 2. Cari Max Score dan Max Class ID (Confidence Score adalah Logit Tertinggi)
-        const maxScores = classScores.max(1); // [8400] 
-        const classIds = classScores.argMax(1); // [8400] 
+        // 2. Cari Max Score dan Max Class ID
+        // Skor tertinggi di antara logits kelas adalah skor objek/kelas
+        const maxScores = classScores.max(1); 
+        const classIds = classScores.argMax(1); 
         
         // --- Filtering Awal menggunakan Threshold ---
-        // Buat boolean mask [8400]
         const validScoresMask = maxScores.greater(SCORE_THRESHOLD); 
-        // Ambil indeks yang valid
         const validIndices = validScoresMask.where(validScoresMask, tf.zerosLike(validScoresMask)).arraySync().map((isValid, index) => isValid === 1 ? index : -1).filter(i => i !== -1);
 
         if (validIndices.length === 0) {
             return [tf.tensor2d([]), tf.tensor1d([]), tf.tensor1d([])];
         }
 
-        // Filter Boxes, Scores, dan Class IDs
         const filteredBoxes = boxes.gather(validIndices);
         const filteredScores = maxScores.gather(validIndices);
         const filteredClassIds = classIds.gather(validIndices);
         
-        // 3. Ubah format dari XYWH ke XYXY (Relatif terhadap ukuran input model: 640)
+        // 3. Ubah format dari XYWH ke XYXY (Normalisasi ke 0-1 untuk NMS)
         // TFJS NMS membutuhkan format [y1, x1, y2, x2]
         
         const [x, y, w, h] = tf.split(filteredBoxes, 4, 1);
@@ -61,19 +51,15 @@ async function postprocess(outputTensor) {
         const x2 = tf.add(x, tf.div(w, 2));
         const y2 = tf.add(y, tf.div(h, 2));
         
-        // Normalisasi koordinat menjadi 0-1 (sudah dilakukan karena x,y,w,h sudah 0-640)
-        const nmsBoxes = tf.stack([tf.div(y1, INPUT_SIZE), tf.div(x1, INPUT_SIZE), tf.div(y2, INPUT_SIZE), tf.div(x2, INPUT_SIZE)], 1); // [N, 4] format 0-1
+        // Gabungkan dalam format NMS [y1, x1, y2, x2] (Normalisasi koordinat 0-1)
+        const nmsBoxes = tf.stack([tf.div(y1, INPUT_SIZE), tf.div(x1, INPUT_SIZE), tf.div(y2, INPUT_SIZE), tf.div(x2, INPUT_SIZE)], 1);
         
         return [nmsBoxes, filteredScores, filteredClassIds];
     });
 
     // 4. Non-Max Suppression (NMS)
     const selectedIdx = await tf.image.nonMaxSuppressionAsync(
-        finalBoxes, // Format 0-1
-        finalScores, 
-        MAX_OUTPUT, 
-        NMS_IOU, 
-        SCORE_THRESHOLD
+        finalBoxes, finalScores, MAX_OUTPUT, NMS_IOU, SCORE_THRESHOLD
     );
     
     // 5. Ambil hasil akhir
@@ -94,9 +80,7 @@ async function postprocess(outputTensor) {
         });
     }
 
-    // Pembersihan tensor
     tf.dispose([finalBoxes, finalScores, finalClassIds, selectedIdx]);
-
     return results;
 }
 
@@ -106,27 +90,23 @@ async function runInference(data) {
     if (!model) return;
     
     const startTime = performance.now();
-    
-    // 1. Buat tf.Tensor dari imageData (sudah dikirim via Transferable)
     const pixels = new Uint8ClampedArray(data.imageData);
-    const imageTensor = tf.tensor4d(pixels, [data.height, data.width, 4]).slice([0, 0, 0], [-1, -1, 3]); // Hapus alpha channel (A)
+    const imageTensor = tf.tensor4d(pixels, [data.height, data.width, 4]).slice([0, 0, 0], [-1, -1, 3]);
 
     tf.engine().startScope();
     
     const input = tf.tidy(() => {
-        // Pre-processing: resize, normalisasi, dan expandDims
         return imageTensor.resizeBilinear([INPUT_SIZE, INPUT_SIZE])
-                          .div(255.0) // Normalisasi ke 0-1
-                          .expandDims(0); // Tambah dimensi Batch
+                          .div(255.0) 
+                          .expandDims(0); 
     });
 
     let output = null;
     try {
         const res = await model.executeAsync(input);
-        output = Array.isArray(res) ? res[0] : res; // Ambil output pertama jika array
+        output = Array.isArray(res) ? res[0] : res;
     } catch (err) {
-        console.error("Model inference failed in worker:", err);
-        postMessage({ type: 'ERROR', message: 'Inference failed in worker.' });
+        console.error("Inference failed in worker:", err);
         tf.dispose([input, imageTensor]);
         tf.engine().endScope();
         return;
@@ -137,15 +117,12 @@ async function runInference(data) {
     tf.dispose([input, output, imageTensor]); 
     tf.engine().endScope();
     
-    const endTime = performance.now();
-    const inferenceTime = endTime - startTime;
-    const fps = 1000 / inferenceTime;
+    const inferenceTime = performance.now() - startTime;
 
-    // Kirim hasil deteksi kembali ke thread utama
     postMessage({
         type: 'RESULT',
         boxes: detections,
-        fps: fps,
+        fps: 1000 / inferenceTime,
     });
 }
 
@@ -155,18 +132,22 @@ self.onmessage = async (event) => {
     const data = event.data;
 
     if (data.type === 'INIT') {
-        MODEL_URL = data.modelUrl;
+        // Terima konfigurasi dari main thread
         INPUT_SIZE = data.inputSize;
+        SCORE_THRESHOLD = data.scoreThreshold;
+        NMS_IOU = data.nmsIou;
+        MAX_OUTPUT = data.maxOutput;
+        NUM_CLASSES = data.numClasses;
+        CLASS_NAMES = data.classNames;
 
         tf.setBackend('webgl').then(async () => {
-            console.log("Worker: TFJS WebGL backend set.");
             try {
-                model = await tf.loadGraphModel(MODEL_URL, {
+                model = await tf.loadGraphModel(data.modelUrl, {
                     onProgress: (fraction) => {
                         postMessage({ type: 'LOADING', progress: (fraction * 100) });
                     }
                 });
-                // Warm-up inferensi
+                // Warm-up
                 model.predict(tf.zeros([1, INPUT_SIZE, INPUT_SIZE, 3])).dispose();
                 postMessage({ type: 'LOADED' });
             } catch (err) {
@@ -174,7 +155,6 @@ self.onmessage = async (event) => {
             }
         });
     } else if (data.type === 'INFER') {
-        // Jalankan inferensi
         runInference(data);
     }
 };
