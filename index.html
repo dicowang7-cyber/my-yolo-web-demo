@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOLOv8 Web Realtime Detection (Smooth Camera)</title>
+    <title>YOLOv8 Web Realtime Detection (Smooth & Array Post-processing)</title>
     
     <style>
         body {
@@ -48,7 +48,7 @@
         const progressFill = document.getElementById('progress-fill');
         const fpsInfoEl = document.getElementById('fps-info');
 
-        const INFERENCE_FPS = 15; 
+        const INFERENCE_FPS = 10; // Target inferensi
         const MS_PER_INFERENCE = 1000 / INFERENCE_FPS; 
         let lastInferenceTime = 0;
         let detectionsCache = [];
@@ -60,7 +60,6 @@
         ];
 
         // --- DRAWING DAN RENDERING (MAIN THREAD) ---
-
         function drawFrame(boxes = []) {
             // Gambar Frame Video (Smooth 60 FPS)
             ctx.save();
@@ -71,17 +70,16 @@
 
             // Gambar Deteksi
             boxes.forEach(b => {
-                // Koordinat b.x1, b.y1, dll. sudah dikalikan dengan INPUT_SIZE (640)
-                // Kita perlu menyesuaikannya dengan ukuran canvas dan menerapkan mirroring
+                // Koordinat b.x1, b.y1, dll. sudah dikalikan dengan INPUT_SIZE (640) dari Worker
+                // Kita perlu mengkonversi ke format normalisasi 0-1 untuk drawing
                 
-                // Koordinat dinormalisasi (0-1) dari Worker:
                 const x_normal = (b.x1 / INPUT_SIZE);
                 const y_normal = (b.y1 / INPUT_SIZE);
                 const x2_normal = (b.x2 / INPUT_SIZE);
                 const y2_normal = (b.y2 / INPUT_SIZE);
 
-                // Konversi ke pixel canvas
-                const x = canvas.width - (x2_normal * canvas.width); // Mirroring X
+                // Konversi ke pixel canvas dan Mirroring X
+                const x = canvas.width - (x2_normal * canvas.width); 
                 const y = y_normal * canvas.height;
                 const w = (x2_normal - x_normal) * canvas.width;
                 const h = (y2_normal - y_normal) * canvas.height;
@@ -146,12 +144,12 @@
                 }
             };
 
-            // KIRIM THRESHOLD YANG SANGAT RENDAH: 0.001
+            // KIRIM THRESHOLD 0.001
             worker.postMessage({
                 type: 'INIT',
                 modelUrl: MODEL_URL,
                 inputSize: INPUT_SIZE,
-                scoreThreshold: 0.001, // REVISI KRITIS
+                scoreThreshold: 0.001, // DITURUNKAN KE 0.001
                 nmsIou: 0.45,
                 maxOutput: 50,
                 numClasses: 16,
@@ -163,7 +161,7 @@
         async function setupCamera() {
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "user" }, // Menggunakan kamera depan
+                    video: { facingMode: "user" }, // Menggunakan kamera depan untuk mirroring
                     audio: false
                 });
                 video.srcObject = stream;
