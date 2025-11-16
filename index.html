@@ -3,97 +3,174 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>YOLOv8 Web Realtime Detection</title>
+<title>YOLOv8 Neon Realtime</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
 
 <style>
     body {
-        background: radial-gradient(circle at top, #2b2b2b, #1a1a1a);
-        color: #fff;
         margin: 0;
+        background: #0d0d0f;
         font-family: "Segoe UI", Arial;
+        color: #fff;
+        overflow-x: hidden;
         text-align: center;
         padding: 20px;
     }
 
     h1 {
         font-size: 2rem;
-        margin-bottom: 8px;
+        margin-bottom: 5px;
+        background: linear-gradient(90deg, #00f0ff, #00ff95);
+        -webkit-background-clip: text;
+        color: transparent;
+        font-weight: 700;
         letter-spacing: 1px;
+    }
+
+    /* PANEL ATAS */
+    #top-panel {
+        margin: 10px auto;
+        padding: 10px 20px;
+        background: rgba(0,255,180,0.08);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(0,255,180,0.25);
+        width: fit-content;
+        border-radius: 12px;
+        box-shadow: 0 0 18px rgba(0,255,150,0.25);
+    }
+
+    #status {
+        font-size: 1.1rem;
+        color: #4cff4c;
         font-weight: 600;
     }
 
-    #status-container {
-        margin-bottom: 20px;
-        font-size: 1.1em;
-        opacity: 0.9;
+    /* FPS */
+    #fps {
+        margin-top: 4px;
+        font-size: 0.95rem;
+        color: #00eaff;
     }
 
-    #status { 
-        color: #4cff4c; 
-        font-weight: bold;
-    }
-
-    /* PROGRESS BAR STYLE */
+    /* PROGRESS BAR */
     #progress-bar {
         width: 320px;
-        height: 12px;
-        background-color: #444;
-        margin: 10px auto 0 auto;
+        height: 10px;
+        margin: 10px auto;
+        background: #333;
         border-radius: 6px;
-        overflow: hidden;
         display: none;
-        border: 1px solid #666;
+        overflow: hidden;
     }
     #progress-fill {
         height: 100%;
         width: 0%;
-        background: linear-gradient(90deg, #00ff8a, #32ff32);
-        transition: width 0.2s;
+        background: linear-gradient(90deg,#00ff92,#00f0ff);
     }
 
     /* VIDEO WRAPPER */
     #video-container {
         position: relative;
         display: inline-block;
-        box-shadow: 0px 0px 25px rgba(0, 255, 170, 0.25);
-        border-radius: 12px;
-        border: 2px solid rgba(0, 255, 150, 0.22);
-        overflow: hidden;
         margin-top: 20px;
+        border-radius: 14px;
+        overflow: hidden;
+        border: 2px solid rgba(0,255,150,0.25);
+        box-shadow: 0px 0px 32px rgba(0,255,180,0.25);
     }
 
-    /* Video disembunyikan total agar TIDAK muncul 2 video */
-    #video {
+    video {
         display: none !important;
     }
 
-    #canvas {
-        position: relative;
-        z-index: 10;
-        display: block;
+    canvas {
+        filter: contrast(1.2) saturate(1.2) brightness(1.1) sharpen(0.8);
+        /* Auto exposure & sharpening look */
+    }
+
+    /* CONTROL PANEL */
+    #controls {
+        margin-top: 20px;
+        background: rgba(0,255,180,0.08);
+        border: 1px solid rgba(0,255,200,0.25);
+        padding: 15px;
+        border-radius: 12px;
+        width: 340px;
+        margin-left: auto;
+        margin-right: auto;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 0 15px rgba(0,255,150,0.2);
+    }
+
+    .btn {
+        background: linear-gradient(90deg,#00ffcc,#00aaff);
+        border: none;
+        padding: 10px 18px;
+        color: #000;
+        border-radius: 10px;
+        font-size: 1rem;
+        cursor: pointer;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+    .btn:hover {
+        opacity: 0.85;
+    }
+
+    .label {
+        font-size: 1rem;
+        margin-top: 10px;
+    }
+
+    input[type="range"] {
+        width: 80%;
     }
 </style>
 </head>
 <body>
 
-<h1>YOLO Realtime Detection</h1>
+<h1>YOLOv8 Neon Realtime</h1>
 
-<div id="status-container">
-    <span id="status">Starting...</span>
-    <div id="progress-bar"><div id="progress-fill"></div></div>
+<div id="top-panel">
+    <div id="status">Starting...</div>
+    <div id="fps">FPS: --</div>
 </div>
+
+<div id="progress-bar"><div id="progress-fill"></div></div>
 
 <div id="video-container">
     <video id="video" playsinline muted></video>
     <canvas id="canvas"></canvas>
 </div>
 
+<div id="controls">
+    <button class="btn" id="switchCam">🔄 Switch Camera</button>
+
+    <div class="label">Confidence Threshold: <span id="confVal">0.25</span></div>
+    <input type="range" id="confSlider" min="0.05" max="0.9" step="0.01" value="0.25">
+</div>
+
 <script>
-/* ————————— CONFIG ————————— */
+/* ========================== CONFIG ========================== */
 const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
+let SCORE_THRESHOLD = 0.25;  // interactive
+const INPUT_SIZE = 640;
+const NMS_IOU = 0.45;
+const MAX_OUTPUT = 50;
+
+let usingFront = false;
+let lastTime = Date.now();
+let fpsNow = 0;
+
+const CLASS_NAMES = [
+    "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga","Melon",
+    "Nanas","Pepaya","Pir","Pisang","Rambutan","Salak","Semangka","Stroberi"
+];
 
 const statusEl = document.getElementById("status");
+const fpsEl = document.getElementById("fps");
+const confSlider = document.getElementById("confSlider");
+const confVal = document.getElementById("confVal");
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
@@ -101,18 +178,8 @@ const progressBar = document.getElementById("progress-bar");
 const progressFill = document.getElementById("progress-fill");
 
 let model = null;
-const INPUT_SIZE = 640;
-const SCORE_THRESHOLD = 0.1;
-const NMS_IOU = 0.45;
-const MAX_OUTPUT = 50;
-const NUM_CLASSES = 16;
 
-const CLASS_NAMES = [
-    "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga","Melon",
-    "Nanas","Pepaya","Pir","Pisang","Rambutan","Salak","Semangka","Stroberi"
-];
-
-/* ————————— UTILITIES ————————— */
+/* ========================== UTILITIES ========================== */
 function sigmoid(x){ return 1/(1+Math.exp(-x)); }
 function softmax(arr){
     const m = Math.max(...arr);
@@ -124,16 +191,39 @@ function xywh_to_xyxy(x,y,w,h){
     return [x-w/2, y-h/2, x+w/2, y+h/2];
 }
 
-/* ————————— DRAW BOXES ————————— */
+/* ========================== CAMERA ========================== */
+async function setupCamera(){
+    const constraints = {
+        video:{
+            facingMode: usingFront ? "user" : "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            exposureMode: "continuous"
+        },
+        audio:false
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+    video.srcObject = stream;
+    await new Promise(res => video.onloadedmetadata = res);
+    video.play();
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    document.getElementById("video-container").style.width = video.videoWidth+"px";
+    document.getElementById("video-container").style.height = video.videoHeight+"px";
+}
+
+/* ========================== BOX DRAWING ========================== */
 function drawBoxes(boxes) {
-    // gambar video yang sudah di-mirror
     ctx.save();
     ctx.scale(-1, 1);
     ctx.translate(-canvas.width, 0);
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     ctx.restore();
 
-    // gambar bounding box
     boxes.forEach(b => {
         const scaledX1 = b.x1 * (canvas.width / INPUT_SIZE);
         const scaledX2 = b.x2 * (canvas.width / INPUT_SIZE);
@@ -145,24 +235,23 @@ function drawBoxes(boxes) {
         const w = scaledX2 - scaledX1;
         const h = scaledY2 - scaledY1;
 
-        ctx.strokeStyle = "lime";
-        ctx.lineWidth = Math.max(2, canvas.width / 200);
+        ctx.strokeStyle = "#00ffb7";
+        ctx.lineWidth = 2;
         ctx.strokeRect(x, y, w, h);
 
-        // label
         const label = `${CLASS_NAMES[b.classId]} ${(b.score*100).toFixed(1)}%`;
-        ctx.font = "18px Segoe UI";
+        ctx.font = "16px Segoe UI";
         const tw = ctx.measureText(label).width;
 
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
         ctx.fillRect(x, y - 22, tw + 8, 22);
 
-        ctx.fillStyle = "lime";
+        ctx.fillStyle = "#00ffea";
         ctx.fillText(label, x + 4, y - 6);
     });
 }
 
-/* ————————— POSTPROCESS ————————— */
+/* ========================== POSTPROCESS ========================== */
 async function postprocess(out) {
     let t = out;
     const trans = tf.tidy(() => t.squeeze().transpose());
@@ -176,11 +265,11 @@ async function postprocess(out) {
         const [x,y,w,h] = row;
         const probs = softmax(row.slice(4));
         const maxProb = Math.max(...probs);
-        const classId = probs.indexOf(maxProb);
-
         if (maxProb < SCORE_THRESHOLD) continue;
 
+        const classId = probs.indexOf(maxProb);
         const [x1,y1,x2,y2] = xywh_to_xyxy(x,y,w,h);
+
         boxes.push([y1*INPUT_SIZE, x1*INPUT_SIZE, y2*INPUT_SIZE, x2*INPUT_SIZE]);
         scores.push(maxProb);
         classIds.push(classId);
@@ -190,96 +279,84 @@ async function postprocess(out) {
 
     const b = tf.tensor2d(boxes);
     const s = tf.tensor1d(scores);
-    const idx = await tf.image.nonMaxSuppressionAsync(b,s,MAX_OUTPUT,NMS_IOU,SCORE_THRESHOLD);
+    const idx = await tf.image.nonMaxSuppressionAsync(b, s, MAX_OUTPUT, NMS_IOU, SCORE_THRESHOLD);
     const sel = await idx.array();
 
-    const final = [];
-    sel.forEach(i => {
-        const [y1,x1,y2,x2] = boxes[i];
-        final.push({x1,y1,x2,y2, score:scores[i], classId:classIds[i]});
-    });
-
     b.dispose(); s.dispose(); idx.dispose();
-    return final;
-}
 
-/* ————————— INIT MODEL ————————— */
-async function loadModel(){
-    try{
-        statusEl.textContent = "Loading model...";
-        progressBar.style.display = "block";
-
-        model = await tf.loadGraphModel(MODEL_URL, {
-            onProgress: p => {
-                progressFill.style.width = `${p*100}%`;
-                statusEl.textContent = `Loading model... ${(p*100).toFixed(1)}%`;
-            }
-        });
-
-        progressBar.style.display = "none";
-        statusEl.textContent = "Model loaded.";
-    } catch(e){
-        statusEl.textContent = "Failed loading model.";
-        console.error(e);
-    }
-}
-
-/* ————————— CAMERA ————————— */
-async function setupCamera(){
-    const stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode:"environment" },
-        audio:false
+    return sel.map(i => {
+        const [y1,x1,y2,x2] = boxes[i];
+        return {x1,y1,x2,y2, score:scores[i], classId:classIds[i]};
     });
-    video.srcObject = stream;
-    await new Promise(r=>video.onloadedmetadata=r);
-    video.play();
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-
-    document.getElementById("video-container").style.width = video.videoWidth+"px";
-    document.getElementById("video-container").style.height = video.videoHeight+"px";
 }
 
-/* ————————— LOOP ————————— */
+/* ========================== MODEL ========================== */
+async function loadModel(){
+    statusEl.textContent = "Loading model...";
+    progressBar.style.display = "block";
+
+    model = await tf.loadGraphModel(MODEL_URL, {
+        onProgress: p => {
+            progressFill.style.width = `${p*100}%`;
+        }
+    });
+
+    progressBar.style.display = "none";
+    statusEl.textContent = "Model loaded.";
+}
+
+/* ========================== LOOP ========================== */
 async function detectLoop() {
-    if (!model) return;
+    if (!model) return requestAnimationFrame(detectLoop);
+
+    const start = performance.now();
 
     tf.engine().startScope();
-
     const inp = tf.tidy(() => {
         const img = tf.browser.fromPixels(video);
-        return img.resizeBilinear([INPUT_SIZE,INPUT_SIZE]).div(255).expandDims(0);
+        return img.resizeBilinear([INPUT_SIZE, INPUT_SIZE]).div(255).expandDims(0);
     });
 
-    let out = null;
+    let out;
     try {
         const res = await model.executeAsync(inp);
         out = Array.isArray(res) ? res[0] : res;
-    } catch(e){
-        console.error("Inference error:", e);
-        tf.dispose(inp);
-        tf.engine().endScope();
-        requestAnimationFrame(detectLoop);
-        return;
+    } catch(err){
+        console.error(err);
     }
 
-    const det = await postprocess(out);
+    const det = out ? await postprocess(out) : [];
     drawBoxes(det);
 
     tf.dispose([inp,out]);
     tf.engine().endScope();
 
+    const end = performance.now();
+    fpsNow = Math.round(1000 / (end - lastTime));
+    lastTime = end;
+    fpsEl.textContent = `FPS: ${fpsNow}`;
+
     requestAnimationFrame(detectLoop);
 }
 
-/* ————————— MAIN ————————— */
+/* ========================== MAIN ========================== */
 (async () => {
     await loadModel();
     await setupCamera();
     statusEl.textContent = "Model ready — Detecting...";
     detectLoop();
 })();
+
+/* ========================== CONTROLS ========================== */
+document.getElementById("switchCam").onclick = async () => {
+    usingFront = !usingFront;
+    await setupCamera();
+};
+
+confSlider.oninput = () => {
+    SCORE_THRESHOLD = parseFloat(confSlider.value);
+    confVal.textContent = SCORE_THRESHOLD.toFixed(2);
+};
 </script>
 
 </body>
