@@ -1,191 +1,36 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOLOv8 Web Realtime Detection (Smooth & Array Post-processing)</title>
-    
-    <style>
-        body {
-            background-color: #1e1e1e; color: #ffffff; font-family: Arial, sans-serif; margin: 0;
-            display: flex; flex-direction: column; align-items: center; padding: 20px;
-        }
-        h1 { color: #ffffff; font-size: 2em; margin-bottom: 10px; }
-        #status-container { margin-bottom: 20px; font-size: 1.1em; color: #b0b0b0; text-align: center; }
-        #status { color: lime; font-weight: bold; }
-        #progress-bar { width: 300px; height: 10px; background-color: #555; margin-top: 5px; border-radius: 5px; overflow: hidden; display: none; }
-        #progress-fill { height: 100%; width: 0%; background-color: lime; transition: width 0.3s; }
-        #video-container { position: relative; width: 640px; height: 480px; overflow: hidden; border: 3px solid #333; border-radius: 8px; }
-        #canvas { position: absolute; top: 0; left: 0; z-index: 10; }
-        #video { visibility: hidden; position: absolute; }
-        #fps-info { color: #888; font-size: 0.9em; margin-top: 5px; }
-    </style>
+    <title>🍎 Deteksi Buah Real-Time (YOLOv8-int8)</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>YOLO Web Realtime Detection 🚀</h1>
-    
-    <div id="status-container">
-        <span id="status">Starting up...</span>
-        <div id="progress-bar">
-            <div id="progress-fill"></div>
+    <div class="container">
+        <header>
+            <h1>🍌 Deteksi Buah Real-Time (TFJS)</h1>
+            <p>Model deteksi objek YOLOv8 (8-bit quantized) berjalan langsung di browser Anda.</p>
+        </header>
+
+        <div class="video-container">
+            <video id="webcam" autoplay muted playsinline></video>
+            
+            <canvas id="canvas" class="overlay"></canvas>
+            
+            <div id="status" class="status-box loading">
+                Memuat Model... Tunggu sebentar.
+            </div>
         </div>
-        <div id="fps-info"></div>
+
+        <div class="stats-container">
+            <span id="fps">FPS: 0</span>
+            <span id="class-count">Total Deteksi: 0</span>
+        </div>
     </div>
 
-    <div id="video-container">
-        <video id="video" playsinline muted></video>
-        <canvas id="canvas"></canvas>
-    </div>
-
-    <script>
-        const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
-        const INPUT_SIZE = 640; 
-        const statusEl = document.getElementById('status');
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const progressBar = document.getElementById('progress-bar');
-        const progressFill = document.getElementById('progress-fill');
-        const fpsInfoEl = document.getElementById('fps-info');
-
-        const INFERENCE_FPS = 10; // Target inferensi
-        const MS_PER_INFERENCE = 1000 / INFERENCE_FPS; 
-        let lastInferenceTime = 0;
-        let detectionsCache = [];
-        let worker;
-
-        const CLASS_NAMES = [
-            "Alpukat", "Anggur", "Apel", "Apel Hijau", "Jeruk", "Lemon", "Mangga", "Melon", 
-            "Nanas", "Pepaya", "Pir", "Pisang", "Rambutan", "Salak", "Semangka", "Stroberi" 
-        ];
-
-        // --- DRAWING DAN RENDERING (MAIN THREAD) ---
-        function drawFrame(boxes = []) {
-            // Gambar Frame Video (Smooth 60 FPS)
-            ctx.save();
-            ctx.scale(-1, 1);
-            ctx.translate(-canvas.width, 0); 
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            ctx.restore(); 
-
-            // Gambar Deteksi
-            boxes.forEach(b => {
-                // Koordinat b.x1, b.y1, dll. sudah dikalikan dengan INPUT_SIZE (640) dari Worker
-                // Kita perlu mengkonversi ke format normalisasi 0-1 untuk drawing
-                
-                const x_normal = (b.x1 / INPUT_SIZE);
-                const y_normal = (b.y1 / INPUT_SIZE);
-                const x2_normal = (b.x2 / INPUT_SIZE);
-                const y2_normal = (b.y2 / INPUT_SIZE);
-
-                // Konversi ke pixel canvas dan Mirroring X
-                const x = canvas.width - (x2_normal * canvas.width); 
-                const y = y_normal * canvas.height;
-                const w = (x2_normal - x_normal) * canvas.width;
-                const h = (y2_normal - y_normal) * canvas.height;
-                
-                // Box
-                ctx.strokeStyle = "lime";
-                ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 200));
-                ctx.strokeRect(x, y, w, h);
-
-                // Label
-                const label = `${b.className} ${(b.score*100).toFixed(1)}%`; 
-                ctx.font = "18px Arial";
-                const textW = ctx.measureText(label).width;
-                const pad = 6;
-                
-                ctx.fillStyle = "rgba(0,0,0,0.6)";
-                ctx.fillRect(x, y - 22, textW + pad, 22);
-                ctx.fillStyle = "lime";
-                ctx.fillText(label, x + 4, y - 6);
-            });
-        }
-
-        function animationLoop(now) {
-            drawFrame(detectionsCache); 
-
-            if (now - lastInferenceTime > MS_PER_INFERENCE && worker) {
-                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                
-                worker.postMessage({
-                    type: 'INFER',
-                    imageData: imageData.data.buffer,
-                    width: canvas.width,
-                    height: canvas.height
-                }, [imageData.data.buffer]); 
-                
-                lastInferenceTime = now;
-            }
-
-            requestAnimationFrame(animationLoop);
-        }
-
-        // --- SETUP WORKER DAN LISTENER ---
-        function setupWorker() {
-            worker = new Worker('yolo-worker.js');
-
-            worker.onmessage = (event) => {
-                const data = event.data;
-
-                if (data.type === 'LOADING') {
-                    progressBar.style.display = 'block';
-                    statusEl.textContent = `Loading model... ${data.progress.toFixed(1)}%`;
-                    progressFill.style.width = `${data.progress}%`;
-                } else if (data.type === 'LOADED') {
-                    progressBar.style.display = 'none';
-                    statusEl.textContent = "Model ready — running detection.";
-                } else if (data.type === 'ERROR') {
-                    statusEl.textContent = `Worker Error: ${data.message}`;
-                    console.error("Worker Error:", data.message);
-                } else if (data.type === 'RESULT') {
-                    detectionsCache = data.boxes; 
-                    fpsInfoEl.textContent = `Inferensi: ${data.fps.toFixed(1)} FPS | Detections: ${data.boxes.length}`;
-                }
-            };
-
-            // KIRIM THRESHOLD 0.001
-            worker.postMessage({
-                type: 'INIT',
-                modelUrl: MODEL_URL,
-                inputSize: INPUT_SIZE,
-                scoreThreshold: 0.001, // DITURUNKAN KE 0.001
-                nmsIou: 0.45,
-                maxOutput: 50,
-                numClasses: 16,
-                classNames: CLASS_NAMES
-            });
-        }
-
-        // --- SETUP KAMERA ---
-        async function setupCamera() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "user" }, // Menggunakan kamera depan untuk mirroring
-                    audio: false
-                });
-                video.srcObject = stream;
-                await new Promise(resolve => video.onloadedmetadata = resolve);
-                video.play();
-                
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                document.getElementById('video-container').style.width = `${video.videoWidth}px`;
-                document.getElementById('video-container').style.height = `${video.videoHeight}px`;
-
-                animationLoop(0); 
-
-            } catch (err) {
-                console.error("Camera error:", err);
-                statusEl.textContent = "Camera error. Allow camera and reload.";
-            }
-        }
-
-        // --- Main Execution ---
-        (async () => {
-            setupWorker();
-            await setupCamera();
-        })();
-    </script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    
+    <script src="script.js"></script>
 </body>
 </html>
