@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>YOLOv8 Web Realtime Detection — FIXED</title>
+<title>YOLOv8 Web Realtime Detection</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
 
 <style>
@@ -34,7 +34,7 @@
         font-weight: bold;
     }
 
-    /* Progress bar */
+    /* PROGRESS BAR STYLE */
     #progress-bar {
         width: 320px;
         height: 12px;
@@ -52,6 +52,7 @@
         transition: width 0.2s;
     }
 
+    /* VIDEO WRAPPER */
     #video-container {
         position: relative;
         display: inline-block;
@@ -62,9 +63,11 @@
         margin-top: 20px;
     }
 
+    /* Video disembunyikan total agar TIDAK muncul 2 video */
     #video {
         display: none !important;
     }
+
     #canvas {
         position: relative;
         z-index: 10;
@@ -87,12 +90,8 @@
 </div>
 
 <script>
-/* ----------------------------------------------------------- */
-/* CONFIG */
-const MODEL_URL = "./model.json"; // SESUAI PERMINTAAN
-
-await tf.setBackend("webgl");
-await tf.ready();
+/* ————————— CONFIG ————————— */
+const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
 
 const statusEl = document.getElementById("status");
 const video = document.getElementById("video");
@@ -102,139 +101,109 @@ const progressBar = document.getElementById("progress-bar");
 const progressFill = document.getElementById("progress-fill");
 
 let model = null;
-const INPUT_SIZE = 320;        // FPS BOOST (640 → 320)
-const SCORE_THRESHOLD = 0.25;
+const INPUT_SIZE = 640;
+const SCORE_THRESHOLD = 0.1;
 const NMS_IOU = 0.45;
 const MAX_OUTPUT = 50;
+const NUM_CLASSES = 16;
 
 const CLASS_NAMES = [
     "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga","Melon",
     "Nanas","Pepaya","Pir","Pisang","Rambutan","Salak","Semangka","Stroberi"
 ];
 
-/* ----------------------------------------------------------- */
-/* DRAW BOXES */
-function drawBoxes(det) {
+/* ————————— UTILITIES ————————— */
+function sigmoid(x){ return 1/(1+Math.exp(-x)); }
+function softmax(arr){
+    const m = Math.max(...arr);
+    const ex = arr.map(v=>Math.exp(v-m));
+    const sum = ex.reduce((a,b)=>a+b);
+    return ex.map(e=>e/sum);
+}
+function xywh_to_xyxy(x,y,w,h){
+    return [x-w/2, y-h/2, x+w/2, y+h/2];
+}
+
+/* ————————— DRAW BOXES ————————— */
+function drawBoxes(boxes) {
+    // gambar video yang sudah di-mirror
     ctx.save();
     ctx.scale(-1, 1);
     ctx.translate(-canvas.width, 0);
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     ctx.restore();
 
-    det.forEach(b => {
-        const scaleX = canvas.width  / INPUT_SIZE;
-        const scaleY = canvas.height / INPUT_SIZE;
+    // gambar bounding box
+    boxes.forEach(b => {
+        const scaledX1 = b.x1 * (canvas.width / INPUT_SIZE);
+        const scaledX2 = b.x2 * (canvas.width / INPUT_SIZE);
+        const scaledY1 = b.y1 * (canvas.height / INPUT_SIZE);
+        const scaledY2 = b.y2 * (canvas.height / INPUT_SIZE);
 
-        const x1 = canvas.width - (b.x2 * scaleX);
-        const y1 = b.y1 * scaleY;
-        const w  = (b.x2 - b.x1) * scaleX;
-        const h  = (b.y2 - b.y1) * scaleY;
+        const x = canvas.width - scaledX2;
+        const y = scaledY1;
+        const w = scaledX2 - scaledX1;
+        const h = scaledY2 - scaledY1;
 
         ctx.strokeStyle = "lime";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x1, y1, w, h);
+        ctx.lineWidth = Math.max(2, canvas.width / 200);
+        ctx.strokeRect(x, y, w, h);
 
+        // label
         const label = `${CLASS_NAMES[b.classId]} ${(b.score*100).toFixed(1)}%`;
         ctx.font = "18px Segoe UI";
         const tw = ctx.measureText(label).width;
 
         ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.fillRect(x1, y1 - 22, tw + 8, 22);
+        ctx.fillRect(x, y - 22, tw + 8, 22);
 
         ctx.fillStyle = "lime";
-        ctx.fillText(label, x1 + 4, y1 - 6);
+        ctx.fillText(label, x + 4, y - 6);
     });
 }
 
-/* ----------------------------------------------------------- */
-/* FIXED POSTPROCESS — UNIVERSAL YOLOv8 FORMAT HANDLER */
-function fastPostprocess(outputTensor, scoreThreshold) {
-    let t = outputTensor.squeeze(); // [N, row] or [row, N]
+/* ————————— POSTPROCESS ————————— */
+async function postprocess(out) {
+    let t = out;
+    const trans = tf.tidy(() => t.squeeze().transpose());
+    const arr = await trans.array();
+    trans.dispose();
 
-    // auto fix orientation
-    if (t.shape[0] < t.shape[1]) {
-        t = t.transpose(); // ensure [N, rowSize]
-    }
+    const boxes = [], scores = [], classIds = [];
 
-    const [N, rowSize] = t.shape;
-    const raw = t.dataSync();
+    for (let i = 0; i < arr.length; i++){
+        const row = arr[i];
+        const [x,y,w,h] = row;
+        const probs = softmax(row.slice(4));
+        const maxProb = Math.max(...probs);
+        const classId = probs.indexOf(maxProb);
 
-    const expected = CLASS_NAMES.length;
-    const numClasses = rowSize - 4;   // dynamic class count
+        if (maxProb < SCORE_THRESHOLD) continue;
 
-    if (numClasses !== expected) {
-        console.warn("⚠ Model output class count mismatch:", numClasses, "expected:", expected);
-    }
-
-    const boxes = [];
-    const scores = [];
-    const classIds = [];
-
-    for (let i = 0; i < N; i++) {
-        const base = i * rowSize;
-
-        const x = raw[base + 0];
-        const y = raw[base + 1];
-        const w = raw[base + 2];
-        const h = raw[base + 3];
-
-        // softmax
-        let maxLogit = -Infinity;
-        for (let c = 4; c < rowSize; c++) {
-            const v = raw[base + c];
-            if (v > maxLogit) maxLogit = v;
-        }
-
-        let sumExp = 0;
-        const exps = [];
-        for (let c = 4; c < rowSize; c++) {
-            const e = Math.exp(raw[base + c] - maxLogit);
-            exps[c - 4] = e;
-            sumExp += e;
-        }
-
-        let bestProb = 0;
-        let bestClass = 0;
-        for (let c = 0; c < exps.length; c++) {
-            const p = exps[c] / sumExp;
-            if (p > bestProb) { bestProb = p; bestClass = c; }
-        }
-
-        if (bestProb < scoreThreshold) continue;
-
-        const x1 = (x - w/2) * INPUT_SIZE;
-        const y1 = (y - h/2) * INPUT_SIZE;
-        const x2 = (x + w/2) * INPUT_SIZE;
-        const y2 = (y + h/2) * INPUT_SIZE;
-
-        boxes.push([y1,x1,y2,x2]);
-        scores.push(bestProb);
-        classIds.push(bestClass);
+        const [x1,y1,x2,y2] = xywh_to_xyxy(x,y,w,h);
+        boxes.push([y1*INPUT_SIZE, x1*INPUT_SIZE, y2*INPUT_SIZE, x2*INPUT_SIZE]);
+        scores.push(maxProb);
+        classIds.push(classId);
     }
 
     if (!boxes.length) return [];
 
-    const boxT = tf.tensor2d(boxes);
-    const scoreT = tf.tensor1d(scores);
+    const b = tf.tensor2d(boxes);
+    const s = tf.tensor1d(scores);
+    const idx = await tf.image.nonMaxSuppressionAsync(b,s,MAX_OUTPUT,NMS_IOU,SCORE_THRESHOLD);
+    const sel = await idx.array();
 
-    const idx = tf.image.nonMaxSuppression(
-        boxT, scoreT, MAX_OUTPUT, NMS_IOU, scoreThreshold
-    ).arraySync();
-
-    const result = idx.map(i => {
+    const final = [];
+    sel.forEach(i => {
         const [y1,x1,y2,x2] = boxes[i];
-        return {x1,y1,x2,y2, score:scores[i], classId:classIds[i]};
+        final.push({x1,y1,x2,y2, score:scores[i], classId:classIds[i]});
     });
 
-    boxT.dispose();
-    scoreT.dispose();
-    t.dispose();
-
-    return result;
+    b.dispose(); s.dispose(); idx.dispose();
+    return final;
 }
 
-/* ----------------------------------------------------------- */
-/* LOAD MODEL */
+/* ————————— INIT MODEL ————————— */
 async function loadModel(){
     try{
         statusEl.textContent = "Loading model...";
@@ -249,67 +218,62 @@ async function loadModel(){
 
         progressBar.style.display = "none";
         statusEl.textContent = "Model loaded.";
-    } catch (e){
-        statusEl.textContent = "Model load failed.";
+    } catch(e){
+        statusEl.textContent = "Failed loading model.";
         console.error(e);
     }
 }
 
-/* ----------------------------------------------------------- */
-/* CAMERA */
+/* ————————— CAMERA ————————— */
 async function setupCamera(){
     const stream = await navigator.mediaDevices.getUserMedia({
         video:{ facingMode:"environment" },
         audio:false
     });
-
     video.srcObject = stream;
-    await new Promise(r => video.onloadedmetadata = r);
+    await new Promise(r=>video.onloadedmetadata=r);
     video.play();
 
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
 
-    const vc = document.getElementById("video-container");
-    vc.style.width  = video.videoWidth + "px";
-    vc.style.height = video.videoHeight + "px";
+    document.getElementById("video-container").style.width = video.videoWidth+"px";
+    document.getElementById("video-container").style.height = video.videoHeight+"px";
 }
 
-/* ----------------------------------------------------------- */
-/* REALTIME DETECTION */
-async function detectLoop(){
+/* ————————— LOOP ————————— */
+async function detectLoop() {
     if (!model) return;
 
     tf.engine().startScope();
 
-    const input = tf.tidy(() => {
+    const inp = tf.tidy(() => {
         const img = tf.browser.fromPixels(video);
-        return img.resizeBilinear([INPUT_SIZE, INPUT_SIZE])
-                  .div(255)
-                  .expandDims(0);
+        return img.resizeBilinear([INPUT_SIZE,INPUT_SIZE]).div(255).expandDims(0);
     });
 
     let out = null;
     try {
-        out = await model.executeAsync(input);
-    } catch (e){
-        console.error("Inference failed:", e);
-        tf.dispose(input);
+        const res = await model.executeAsync(inp);
+        out = Array.isArray(res) ? res[0] : res;
+    } catch(e){
+        console.error("Inference error:", e);
+        tf.dispose(inp);
         tf.engine().endScope();
-        return requestAnimationFrame(detectLoop);
+        requestAnimationFrame(detectLoop);
+        return;
     }
 
-    const det = fastPostprocess(Array.isArray(out) ? out[0] : out, SCORE_THRESHOLD);
+    const det = await postprocess(out);
     drawBoxes(det);
 
-    tf.dispose([input,out]);
+    tf.dispose([inp,out]);
     tf.engine().endScope();
 
     requestAnimationFrame(detectLoop);
 }
 
-/* ----------------------------------------------------------- */
-/* MAIN */
+/* ————————— MAIN ————————— */
 (async () => {
     await loadModel();
     await setupCamera();
