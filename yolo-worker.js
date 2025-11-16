@@ -3,7 +3,7 @@ importScripts('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.j
 
 let model = null;
 let INPUT_SIZE;
-let SCORE_THRESHOLD;
+let SCORE_THRESHOLD; 
 let NMS_IOU;
 let MAX_OUTPUT;
 let NUM_CLASSES;
@@ -29,16 +29,18 @@ function xywh_to_xyxy(x, y, w, h) {
 // --- FUNGSI POST-PROCESSING SESUAI LOGIKA ANDA ---
 
 async function postprocess(outputTensor) {
-    // Peringatan: Proses ini sangat lambat karena menggunakan Array JS/CPU loop
+    // Proses ini lambat karena menggunakan Array JS/CPU loop, tetapi ini adalah logika yang Anda minta.
 
     // 1. Dapatkan data array mentah dari output tensor
-    const transposed = tf.tidy(() => outputTensor.squeeze().transpose()); // [8400, 20]
+    const transposed = tf.tidy(() => outputTensor.squeeze().transpose()); 
     const data = await transposed.array();
     transposed.dispose();
 
     const boxes = [];
     const scores = [];
     const classIds = [];
+    
+    let maxOverallScore = 0;
         
     for (let i = 0; i < data.length; i++) {
         const row = data[i];
@@ -48,7 +50,7 @@ async function postprocess(outputTensor) {
         const w = row[2];
         const h = row[3];
         
-        // Logika Post-processing Anda:
+        // Logika Asli Anda:
         const classLogits = row.slice(4); 
         const probs = softmax(classLogits);
         const maxProb = Math.max(...probs);
@@ -56,7 +58,11 @@ async function postprocess(outputTensor) {
 
         const finalScore = maxProb; 
         
-        // Gunakan threshold rendah yang dikirim dari main thread
+        if (finalScore > maxOverallScore) {
+            maxOverallScore = finalScore;
+        }
+        
+        // Gunakan threshold sangat rendah
         if (finalScore < SCORE_THRESHOLD) continue; 
 
         const [x1, y1, x2, y2] = xywh_to_xyxy(x, y, w, h);
@@ -66,6 +72,8 @@ async function postprocess(outputTensor) {
         scores.push(finalScore);
         classIds.push(classId); 
     }
+
+    console.log(`Worker Max Score: ${maxOverallScore.toFixed(6)}. Detections passed: ${boxes.length}`);
 
     if (boxes.length === 0) {
         return [];
@@ -97,7 +105,7 @@ async function postprocess(outputTensor) {
 }
 
 
-// --- Handler Inferensi di Worker ---
+// --- Handler Inferensi di Worker (Sama) ---
 async function runInference(data) {
     if (!model) return;
     
@@ -144,9 +152,8 @@ self.onmessage = async (event) => {
     const data = event.data;
 
     if (data.type === 'INIT') {
-        // Terima konfigurasi dari main thread
         INPUT_SIZE = data.inputSize;
-        SCORE_THRESHOLD = data.scoreThreshold; // Menerima 0.001
+        SCORE_THRESHOLD = data.scoreThreshold; 
         NMS_IOU = data.nmsIou;
         MAX_OUTPUT = data.maxOutput;
         NUM_CLASSES = data.numClasses;
