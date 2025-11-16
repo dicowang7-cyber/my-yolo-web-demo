@@ -1,373 +1,286 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOLOv8 Web Realtime Detection</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
-    
-    <style>
-        body {
-            background-color: #1e1e1e;
-            color: #ffffff;
-            font-family: Arial, sans-serif;
-            margin: 0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            padding: 20px;
-        }
-        h1 {
-            color: #ffffff;
-            font-size: 2em;
-            margin-bottom: 10px;
-        }
-        #status-container {
-            margin-bottom: 20px;
-            font-size: 1.1em;
-            color: #b0b0b0;
-        }
-        #status {
-            color: lime;
-            font-weight: bold;
-        }
-        #progress-bar {
-            width: 300px;
-            height: 10px;
-            background-color: #555;
-            margin-top: 5px;
-            border-radius: 5px;
-            overflow: hidden;
-            display: none; /* Sembunyikan secara default */
-        }
-        #progress-fill {
-            height: 100%;
-            width: 0%;
-            background-color: lime;
-            transition: width 0.3s;
-        }
-        #video, #canvas {
-            display: block;
-        }
-        #video-container {
-            position: relative;
-            width: 640px; /* Contoh lebar */
-            height: 480px; /* Contoh tinggi */
-            overflow: hidden;
-            border: 3px solid #333;
-            border-radius: 8px;
-        }
-        #canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            z-index: 10;
-        }
-        /* Style untuk video agar tidak terlihat, hanya canvas yang ditampilkan */
-        #video {
-            visibility: hidden;
-            position: absolute;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YOLOv8 Web Realtime Detection</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
+
+<style>
+    body {
+        background: radial-gradient(circle at top, #2b2b2b, #1a1a1a);
+        color: #fff;
+        margin: 0;
+        font-family: "Segoe UI", Arial;
+        text-align: center;
+        padding: 20px;
+    }
+
+    h1 {
+        font-size: 2rem;
+        margin-bottom: 8px;
+        letter-spacing: 1px;
+        font-weight: 600;
+    }
+
+    #status-container {
+        margin-bottom: 20px;
+        font-size: 1.1em;
+        opacity: 0.9;
+    }
+
+    #status { 
+        color: #4cff4c; 
+        font-weight: bold;
+    }
+
+    /* PROGRESS BAR STYLE */
+    #progress-bar {
+        width: 320px;
+        height: 12px;
+        background-color: #444;
+        margin: 10px auto 0 auto;
+        border-radius: 6px;
+        overflow: hidden;
+        display: none;
+        border: 1px solid #666;
+    }
+    #progress-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #00ff8a, #32ff32);
+        transition: width 0.2s;
+    }
+
+    /* VIDEO WRAPPER */
+    #video-container {
+        position: relative;
+        display: inline-block;
+        box-shadow: 0px 0px 25px rgba(0, 255, 170, 0.25);
+        border-radius: 12px;
+        border: 2px solid rgba(0, 255, 150, 0.22);
+        overflow: hidden;
+        margin-top: 20px;
+    }
+
+    /* Video disembunyikan total agar TIDAK muncul 2 video */
+    #video {
+        display: none !important;
+    }
+
+    #canvas {
+        position: relative;
+        z-index: 10;
+        display: block;
+    }
+</style>
 </head>
 <body>
-    <h1>YOLO Web Realtime Detection</h1>
-    
-    <div id="status-container">
-        <span id="status">Starting up...</span>
-        <div id="progress-bar">
-            <div id="progress-fill"></div>
-        </div>
-    </div>
 
-    <div id="video-container">
-        <video id="video" playsinline muted></video>
-        <canvas id="canvas"></canvas>
-    </div>
+<h1>YOLO Realtime Detection</h1>
 
-    <script>
-        // --- KONFIGURASI MODEL & THRESHOLD ---
-        // Anda harus mengganti URL ini dengan lokasi model.json Anda yang sebenarnya
-        const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
+<div id="status-container">
+    <span id="status">Starting...</span>
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+</div>
 
-        const statusEl = document.getElementById('status');
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const progressBar = document.getElementById('progress-bar');
-        const progressFill = document.getElementById('progress-fill');
+<div id="video-container">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+</div>
 
-        let model = null;
-        const INPUT_SIZE = 640;    // Sesuai export YOLO (640x640)
-        const SCORE_THRESHOLD = 0.1; // Tetap 0.1 untuk debugging
-        const NMS_IOU = 0.45;
-        const MAX_OUTPUT = 50;    // Max boxes returned by NMS
-        const NUM_CLASSES = 16;   
+<script>
+/* ————————— CONFIG ————————— */
+const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
 
-        // --- DEFINISI NAMA KELAS AKTUAL (16 Kelas) ---
-        const CLASS_NAMES = [
-            "Alpukat",
-            "Anggur",
-            "Apel",
-            "Apel Hijau",
-            "Jeruk",
-            "Lemon",
-            "Mangga",
-            "Melon",
-            "Nanas",
-            "Pepaya",
-            "Pir",
-            "Pisang",
-            "Rambutan",
-            "Salak",
-            "Semangka", 
-            "Stroberi" 
-        ];
-        // ------------------------------------------
+const statusEl = document.getElementById("status");
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const progressBar = document.getElementById("progress-bar");
+const progressFill = document.getElementById("progress-fill");
 
-        // --- Utility Functions ---
+let model = null;
+const INPUT_SIZE = 640;
+const SCORE_THRESHOLD = 0.1;
+const NMS_IOU = 0.45;
+const MAX_OUTPUT = 50;
+const NUM_CLASSES = 16;
 
-        function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+const CLASS_NAMES = [
+    "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga","Melon",
+    "Nanas","Pepaya","Pir","Pisang","Rambutan","Salak","Semangka","Stroberi"
+];
 
-        function softmax(arr) {
-            const max = Math.max(...arr);
-            const exps = arr.map(v => Math.exp(v - max));
-            const sum = exps.reduce((a,b)=>a+b,0);
-            return exps.map(e => e / sum);
-        }
+/* ————————— UTILITIES ————————— */
+function sigmoid(x){ return 1/(1+Math.exp(-x)); }
+function softmax(arr){
+    const m = Math.max(...arr);
+    const ex = arr.map(v=>Math.exp(v-m));
+    const sum = ex.reduce((a,b)=>a+b);
+    return ex.map(e=>e/sum);
+}
+function xywh_to_xyxy(x,y,w,h){
+    return [x-w/2, y-h/2, x+w/2, y+h/2];
+}
 
-        function xywh_to_xyxy(x, y, w, h) {
-            const x1 = x - w/2;
-            const y1 = y - h/2;
-            const x2 = x + w/2;
-            const y2 = y + h/2;
-            return [x1, y1, x2, y2];
-        }
+/* ————————— DRAW BOXES ————————— */
+function drawBoxes(boxes) {
+    // gambar video yang sudah di-mirror
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.translate(-canvas.width, 0);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
 
-        // --- FUNGSI UTAMA PERBAIKAN: Mirroring Video dan Deteksi ---
-        function drawBoxes(boxes) {
-            
-            // 1. Gambar video frame dengan MIRRORING
-            ctx.save();
-            ctx.scale(-1, 1);
-            ctx.translate(-canvas.width, 0); 
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            ctx.restore(); // Kembalikan konteks ke normal setelah menggambar video
-            
-            // 2. Gambar deteksi dan teks di konteks NORMAL
-            boxes.forEach(b => {
-                // Ambil koordinat yang sudah diskalakan
-                const scaledX1 = b.x1 * (canvas.width / INPUT_SIZE);
-                const scaledX2 = b.x2 * (canvas.width / INPUT_SIZE);
-                const scaledY1 = b.y1 * (canvas.height / INPUT_SIZE);
-                const scaledY2 = b.y2 * (canvas.height / INPUT_SIZE);
-                
-                // Terapkan formula MIRRORING ke koordinat X
-                // X awal deteksi harus dibalik: canvas.width - X2_scaled (untuk x1)
-                const x = canvas.width - scaledX2; 
-                const y = scaledY1;
-                const w = scaledX2 - scaledX1;
-                const h = scaledY2 - scaledY1;
-                
-                // Box (Digambar dalam koordinat normal canvas, yang sesuai dengan video yang di-mirror)
-                ctx.strokeStyle = "lime";
-                ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 200));
-                ctx.strokeRect(x, y, w, h);
+    // gambar bounding box
+    boxes.forEach(b => {
+        const scaledX1 = b.x1 * (canvas.width / INPUT_SIZE);
+        const scaledX2 = b.x2 * (canvas.width / INPUT_SIZE);
+        const scaledY1 = b.y1 * (canvas.height / INPUT_SIZE);
+        const scaledY2 = b.y2 * (canvas.height / INPUT_SIZE);
 
-                // Label: Gambar Teks di koordinat NORMAL (Teks TIDAK terbalik)
-                
-                // Mengambil nama kelas dan membentuk label
-                const className = CLASS_NAMES[b.classId] || `Unknown Class ${b.classId}`; 
-                const label = `${className} ${(b.score*100).toFixed(1)}%`; 
-                
-                ctx.font = "18px Arial";
-                const textW = ctx.measureText(label).width;
-                const pad = 6;
-                
-                // Label bg (koordinat normal)
-                ctx.fillStyle = "rgba(0,0,0,0.6)";
-                ctx.fillRect(x, y - 22, textW + pad, 22);
+        const x = canvas.width - scaledX2;
+        const y = scaledY1;
+        const w = scaledX2 - scaledX1;
+        const h = scaledY2 - scaledY1;
 
-                // Text (koordinat normal)
-                ctx.fillStyle = "lime";
-                ctx.fillText(label, x + 4, y - 6);
-            });
-        }
+        ctx.strokeStyle = "lime";
+        ctx.lineWidth = Math.max(2, canvas.width / 200);
+        ctx.strokeRect(x, y, w, h);
 
-        // --- Post-Processing dengan Koreksi YOLOv8 dan Debugging ---
+        // label
+        const label = `${CLASS_NAMES[b.classId]} ${(b.score*100).toFixed(1)}%`;
+        ctx.font = "18px Segoe UI";
+        const tw = ctx.measureText(label).width;
 
-        async function postprocess(outputTensor) {
-            // Model output shape: [1, 20, 8400] -> transpose -> [8400, 20]
-            let t = outputTensor;
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(x, y - 22, tw + 8, 22);
 
-            const transposed = tf.tidy(() => t.squeeze().transpose()); // [8400, 20]
-            const data = await transposed.array();
-            transposed.dispose();
+        ctx.fillStyle = "lime";
+        ctx.fillText(label, x + 4, y - 6);
+    });
+}
 
-            const boxes = [];
-            const scores = [];
-            const classIds = [];
-                
-                let maxOverallScore = 0; 
+/* ————————— POSTPROCESS ————————— */
+async function postprocess(out) {
+    let t = out;
+    const trans = tf.tidy(() => t.squeeze().transpose());
+    const arr = await trans.array();
+    trans.dispose();
 
-            for (let i = 0; i < data.length; i++) {
-                const row = data[i];
-                
-                const x = row[0];
-                const y = row[1];
-                const w = row[2];
-                const h = row[3];
-                
-                const classLogits = row.slice(4); 
-                const probs = softmax(classLogits);
-                const maxProb = Math.max(...probs);
-                const classId = probs.indexOf(maxProb); 
+    const boxes = [], scores = [], classIds = [];
 
-                const finalScore = maxProb; 
-                
-                if (finalScore > maxOverallScore) {
-                    maxOverallScore = finalScore;
-                }
+    for (let i = 0; i < arr.length; i++){
+        const row = arr[i];
+        const [x,y,w,h] = row;
+        const probs = softmax(row.slice(4));
+        const maxProb = Math.max(...probs);
+        const classId = probs.indexOf(maxProb);
 
-                if (finalScore < SCORE_THRESHOLD) continue; 
+        if (maxProb < SCORE_THRESHOLD) continue;
 
-                const [x1, y1, x2, y2] = xywh_to_xyxy(x, y, w, h);
+        const [x1,y1,x2,y2] = xywh_to_xyxy(x,y,w,h);
+        boxes.push([y1*INPUT_SIZE, x1*INPUT_SIZE, y2*INPUT_SIZE, x2*INPUT_SIZE]);
+        scores.push(maxProb);
+        classIds.push(classId);
+    }
 
-                boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]); 
-                scores.push(finalScore);
-                classIds.push(classId); 
-            }
+    if (!boxes.length) return [];
 
-                console.log(`Max class score found: ${maxOverallScore.toFixed(3)}`);
-                console.log(`Detections passing initial threshold (${SCORE_THRESHOLD}): ${boxes.length}`);
+    const b = tf.tensor2d(boxes);
+    const s = tf.tensor1d(scores);
+    const idx = await tf.image.nonMaxSuppressionAsync(b,s,MAX_OUTPUT,NMS_IOU,SCORE_THRESHOLD);
+    const sel = await idx.array();
 
-            if (boxes.length === 0) {
-                return [];
-            }
-            
-            const boxesTensor = tf.tensor2d(boxes);
-            const scoresTensor = tf.tensor1d(scores);
-            const selectedIdx = await tf.image.nonMaxSuppressionAsync(
-                boxesTensor, scoresTensor, MAX_OUTPUT, NMS_IOU, SCORE_THRESHOLD
-            );
-            const selected = await selectedIdx.array();
+    const final = [];
+    sel.forEach(i => {
+        const [y1,x1,y2,x2] = boxes[i];
+        final.push({x1,y1,x2,y2, score:scores[i], classId:classIds[i]});
+    });
 
-            const final = [];
-            for (let idx of selected) {
-                const [y1,x1,y2,x2] = boxes[idx];
-                final.push({
-                    x1: x1, y1: y1, x2: x2, y2: y2,
-                    score: scores[idx],
-                    classId: classIds[idx] 
-                });
-            }
+    b.dispose(); s.dispose(); idx.dispose();
+    return final;
+}
 
-            boxesTensor.dispose();
-            scoresTensor.dispose();
-            selectedIdx.dispose();
+/* ————————— INIT MODEL ————————— */
+async function loadModel(){
+    try{
+        statusEl.textContent = "Loading model...";
+        progressBar.style.display = "block";
 
-            return final;
-        }
+        model = await tf.loadGraphModel(MODEL_URL, {
+            onProgress: p => {
+                progressFill.style.width = `${p*100}%`;
+                statusEl.textContent = `Loading model... ${(p*100).toFixed(1)}%`;
+            }
+        });
 
-        // --- Inisialisasi dan Setup Kamera/Model ---
+        progressBar.style.display = "none";
+        statusEl.textContent = "Model loaded.";
+    } catch(e){
+        statusEl.textContent = "Failed loading model.";
+        console.error(e);
+    }
+}
 
-        async function loadModel() {
-            try {
-                statusEl.textContent = "Loading model...";
-                progressBar.style.display = 'block';
+/* ————————— CAMERA ————————— */
+async function setupCamera(){
+    const stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:"environment" },
+        audio:false
+    });
+    video.srcObject = stream;
+    await new Promise(r=>video.onloadedmetadata=r);
+    video.play();
 
-                model = await tf.loadGraphModel(MODEL_URL, {
-                    onProgress: (fraction) => {
-                        // Tampilkan progress bar saat loading
-                        progressFill.style.width = `${fraction * 100}%`;
-                        statusEl.textContent = `Loading model... ${(fraction * 100).toFixed(1)}%`;
-                    }
-                });
-                
-                progressBar.style.display = 'none';
-                statusEl.textContent = "Model loaded.";
-                console.log("Model loaded:", model);
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
 
-            } catch (err) {
-                progressBar.style.display = 'none';
-                console.error("Failed to load model:", err);
-                statusEl.textContent = "Failed to load model. Check console.";
-            }
-        }
+    document.getElementById("video-container").style.width = video.videoWidth+"px";
+    document.getElementById("video-container").style.height = video.videoHeight+"px";
+}
 
-        async function setupCamera() {
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({
-                    // Menggunakan 'environment' (kamera belakang) atau 'user' (kamera depan)
-                    video: { facingMode: "environment" }, 
-                    audio: false
-                });
-                video.srcObject = stream;
-                await new Promise(resolve => video.onloadedmetadata = resolve);
-                video.play();
-                
-                // Atur ukuran container agar sesuai dengan ukuran video
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                document.getElementById('video-container').style.width = `${video.videoWidth}px`;
-                document.getElementById('video-container').style.height = `${video.videoHeight}px`;
+/* ————————— LOOP ————————— */
+async function detectLoop() {
+    if (!model) return;
 
-            } catch (err) {
-                console.error("Camera error:", err);
-                statusEl.textContent = "Camera error. Allow camera and reload.";
-            }
-        }
+    tf.engine().startScope();
 
-        // --- Detection Loop (Tidak Berubah) ---
+    const inp = tf.tidy(() => {
+        const img = tf.browser.fromPixels(video);
+        return img.resizeBilinear([INPUT_SIZE,INPUT_SIZE]).div(255).expandDims(0);
+    });
 
-        async function detectLoop() {
-            if (!model) return;
+    let out = null;
+    try {
+        const res = await model.executeAsync(inp);
+        out = Array.isArray(res) ? res[0] : res;
+    } catch(e){
+        console.error("Inference error:", e);
+        tf.dispose(inp);
+        tf.engine().endScope();
+        requestAnimationFrame(detectLoop);
+        return;
+    }
 
-            tf.engine().startScope();
+    const det = await postprocess(out);
+    drawBoxes(det);
 
-            const input = tf.tidy(() => {
-                const img = tf.browser.fromPixels(video);
-                return img.resizeBilinear([INPUT_SIZE, INPUT_SIZE]).div(255.0).expandDims(0);
-            });
+    tf.dispose([inp,out]);
+    tf.engine().endScope();
 
-            let output = null;
-            try {
-                const res = await model.executeAsync(input);
-                if (Array.isArray(res)) {
-                    output = res[0];
-                    for (let i = 1; i < res.length; i++) if (res[i] && res[i].dispose) res[i].dispose();
-                } else {
-                    output = res;
-                }
-            } catch (err) {
-                console.error("Model inference failed:", err);
-                statusEl.textContent = "Inference error (see console).";
-                tf.dispose(input);
-                tf.engine().endScope();
-                requestAnimationFrame(detectLoop);
-                return;
-            }
+    requestAnimationFrame(detectLoop);
+}
 
-            const detections = await postprocess(output);
+/* ————————— MAIN ————————— */
+(async () => {
+    await loadModel();
+    await setupCamera();
+    statusEl.textContent = "Model ready — Detecting...";
+    detectLoop();
+})();
+</script>
 
-            drawBoxes(detections);
-
-            tf.dispose([input, output]);
-            tf.engine().endScope();
-
-            requestAnimationFrame(detectLoop);
-        }
-
-        // --- Main Execution ---
-
-        (async () => {
-            await loadModel();
-            await setupCamera();
-            if (model && video.srcObject) {
-                statusEl.textContent = "Model ready — running detection.";
-                detectLoop();
-            }
-        })();
-    </script>
 </body>
 </html>
