@@ -1,500 +1,322 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>YOLOv8 — High FPS Neon</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YOLOv8 Web Realtime Detection — FIXED</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js"></script>
 
 <style>
-  :root{
-    --neon-a: rgba(0,255,190,0.18);
-    --neon-b: rgba(0,220,255,0.12);
-    --accent1: #00ffb7;
-    --accent2: #00d4ff;
-    --bg: #06060a;
-    --panel: rgba(10,10,14,0.6);
-  }
-  html,body{height:100%;margin:0;background:linear-gradient(180deg,#050507 0%, #0a0b10 100%);font-family:Inter, "Segoe UI", Arial; color:#dfefff;}
-  .wrap{max-width:1100px;margin:18px auto;padding:18px;}
-  header{display:flex;align-items:center;justify-content:space-between;gap:12px}
-  h1{margin:0;font-weight:700;font-size:20px;background:linear-gradient(90deg,var(--accent2),var(--accent1));-webkit-background-clip:text;color:transparent}
-  .top-right{display:flex;gap:10px;align-items:center}
-  .panel{background:var(--panel);border:1px solid var(--neon-a);padding:10px;border-radius:12px;box-shadow:0 8px 36px var(--neon-b);backdrop-filter:blur(6px)}
-  #controls{margin-top:14px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
-  .btn{background:linear-gradient(90deg,var(--accent1),var(--accent2));border:none;padding:10px 14px;border-radius:10px;color:#012;cursor:pointer;font-weight:700}
-  .small{font-size:13px;color:#bfefff}
-  #video-container{margin-top:16px;display:flex;justify-content:center}
-  #canvas{border-radius:12px;border:2px solid rgba(0,255,190,0.16);box-shadow:0 18px 50px rgba(0,200,255,0.06);max-width:100%}
-  video{display:none !important}
-  .control-group{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
-  .range{width:240px}
-  .statline{display:flex;gap:12px;align-items:center}
-  .meter{font-weight:700;color:var(--accent2)}
-  .toggle{display:inline-flex;align-items:center;gap:8px}
-  footer{margin-top:18px;font-size:13px;color:#9fbfff;text-align:center}
-  /* small responsive */
-  @media (max-width:640px){
-    .range{width:170px}
-  }
+    body {
+        background: radial-gradient(circle at top, #2b2b2b, #1a1a1a);
+        color: #fff;
+        margin: 0;
+        font-family: "Segoe UI", Arial;
+        text-align: center;
+        padding: 20px;
+    }
+
+    h1 {
+        font-size: 2rem;
+        margin-bottom: 8px;
+        letter-spacing: 1px;
+        font-weight: 600;
+    }
+
+    #status-container {
+        margin-bottom: 20px;
+        font-size: 1.1em;
+        opacity: 0.9;
+    }
+
+    #status { 
+        color: #4cff4c; 
+        font-weight: bold;
+    }
+
+    /* Progress bar */
+    #progress-bar {
+        width: 320px;
+        height: 12px;
+        background-color: #444;
+        margin: 10px auto 0 auto;
+        border-radius: 6px;
+        overflow: hidden;
+        display: none;
+        border: 1px solid #666;
+    }
+    #progress-fill {
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #00ff8a, #32ff32);
+        transition: width 0.2s;
+    }
+
+    #video-container {
+        position: relative;
+        display: inline-block;
+        box-shadow: 0px 0px 25px rgba(0, 255, 170, 0.25);
+        border-radius: 12px;
+        border: 2px solid rgba(0, 255, 150, 0.22);
+        overflow: hidden;
+        margin-top: 20px;
+    }
+
+    #video {
+        display: none !important;
+    }
+    #canvas {
+        position: relative;
+        z-index: 10;
+        display: block;
+    }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div>
-      <h1>YOLOv8 — High FPS Neon</h1>
-      <div class="small">Realtime object detection — optimized for browser high FPS</div>
-    </div>
 
-    <div class="top-right panel">
-      <div style="display:flex;flex-direction:column;gap:6px">
-        <div class="statline"><div class="small">Status:</div><div id="status" class="meter">Initializing...</div></div>
-        <div class="statline"><div class="small">FPS:</div><div id="fps" class="meter">--</div></div>
-      </div>
-    </div>
-  </header>
+<h1>YOLO Realtime Detection</h1>
 
-  <div id="video-container">
-    <div class="panel" style="padding:12px;">
-      <video id="video" playsinline muted></video>
-      <canvas id="canvas"></canvas>
-    </div>
-  </div>
+<div id="status-container">
+    <span id="status">Starting...</span>
+    <div id="progress-bar"><div id="progress-fill"></div></div>
+</div>
 
-  <div id="controls" class="panel">
-    <div class="control-group">
-      <button id="switchCam" class="btn">🔁 Switch Camera</button>
-      <div class="small">Switch between front / back camera</div>
-    </div>
-
-    <div class="control-group">
-      <label class="small">Confidence: <span id="confVal">0.25</span></label>
-      <input id="confSlider" class="range" type="range" min="0.05" max="0.9" step="0.01" value="0.25">
-    </div>
-
-    <div class="control-group">
-      <label class="small">Target FPS: <span id="targetFPSVal">16</span></label>
-      <input id="targetFPSSlider" class="range" type="range" min="6" max="30" step="1" value="16">
-    </div>
-
-    <div class="control-group">
-      <label class="small">Auto-sharpen / exposure</label>
-      <div class="toggle">
-        <input id="filterToggle" type="checkbox" checked>
-        <span class="small">Enabled</span>
-      </div>
-    </div>
-
-    <div style="flex:1"></div>
-
-    <div class="control-group">
-      <div class="small">Model URL (edit jika perlu)</div>
-      <input id="modelUrl" style="width:360px;border-radius:8px;padding:6px;border:none;background:#071226;color:#bfefff" value="https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json">
-    </div>
-    <div class="control-group">
-      <button id="reloadModel" class="btn">⟳ Load Model</button>
-    </div>
-  </div>
-
-  <footer class="small">Tips: jika perangkat Anda low-end, turunkan target FPS atau gunakan model lebih kecil / quantized model.</footer>
+<div id="video-container">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
 </div>
 
 <script>
-/* ================= SETTINGS & DOM ================= */
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+/* ----------------------------------------------------------- */
+/* CONFIG */
+const MODEL_URL = "./model.json"; // SESUAI PERMINTAAN
 
-const statusEl = document.getElementById('status');
-const fpsEl = document.getElementById('fps');
-const confSlider = document.getElementById('confSlider');
-const confVal = document.getElementById('confVal');
-const filterToggle = document.getElementById('filterToggle');
-const switchCamBtn = document.getElementById('switchCam');
-const modelUrlInput = document.getElementById('modelUrl');
-const reloadModelBtn = document.getElementById('reloadModel');
-const targetFPSSlider = document.getElementById('targetFPSSlider');
-const targetFPSVal = document.getElementById('targetFPSVal');
+await tf.setBackend("webgl");
+await tf.ready();
 
-let MODEL_URL = modelUrlInput.value;
+const statusEl = document.getElementById("status");
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const progressBar = document.getElementById("progress-bar");
+const progressFill = document.getElementById("progress-fill");
 
-/* ================= HYPERPARAMETERS (optimized) ================= */
-let SCORE_THRESHOLD = parseFloat(confSlider.value); // adjustable via UI
-let INPUT_SIZE = 320;        // reduced for speed
+let model = null;
+const INPUT_SIZE = 320;        // FPS BOOST (640 → 320)
+const SCORE_THRESHOLD = 0.25;
 const NMS_IOU = 0.45;
 const MAX_OUTPUT = 50;
+
 const CLASS_NAMES = [
-  "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga","Melon",
-  "Nanas","Pepaya","Pir","Pisang","Rambutan","Salak","Semangka","Stroberi"
+    "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga","Melon",
+    "Nanas","Pepaya","Pir","Pisang","Rambutan","Salak","Semangka","Stroberi"
 ];
 
-/* ================= STATE ================= */
-let model = null;
-let usingFront = false;
-let lastDetections = []; // detections from last inference
-let lastInferMs = 0;
-let fps = 0;
-let lastFrameTime = performance.now();
-let frameCount = 0;
-let skipFrames = 1; // 1 = every frame, higher = skip
-let targetFPS = parseInt(targetFPSSlider.value);
+/* ----------------------------------------------------------- */
+/* DRAW BOXES */
+function drawBoxes(det) {
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.translate(-canvas.width, 0);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.restore();
 
-/* ================= UTILITIES ================= */
-function logStatus(s){ statusEl.textContent = s; }
-function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
-function nowMs(){ return performance.now(); }
+    det.forEach(b => {
+        const scaleX = canvas.width  / INPUT_SIZE;
+        const scaleY = canvas.height / INPUT_SIZE;
 
-/* ================= TF SETUP & LOAD MODEL ================= */
-async function initTF() {
-  logStatus('Setting backend to webgl...');
-  try{
-    await tf.setBackend('webgl');
-    await tf.ready();
-    logStatus('Backend ready (webgl).');
-  }catch(e){
-    console.warn('WebGL backend failed, falling back to default', e);
-    await tf.ready();
-    logStatus('TF ready (fallback).');
-  }
+        const x1 = canvas.width - (b.x2 * scaleX);
+        const y1 = b.y1 * scaleY;
+        const w  = (b.x2 - b.x1) * scaleX;
+        const h  = (b.y2 - b.y1) * scaleY;
+
+        ctx.strokeStyle = "lime";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x1, y1, w, h);
+
+        const label = `${CLASS_NAMES[b.classId]} ${(b.score*100).toFixed(1)}%`;
+        ctx.font = "18px Segoe UI";
+        const tw = ctx.measureText(label).width;
+
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(x1, y1 - 22, tw + 8, 22);
+
+        ctx.fillStyle = "lime";
+        ctx.fillText(label, x1 + 4, y1 - 6);
+    });
 }
 
-async function loadModel(url) {
-  try {
-    logStatus('Loading model...');
-    const bars = document.querySelector('#video-container') || document.body;
-    model = await tf.loadGraphModel(url, {
-      onProgress: p => {
-        logStatus(`Loading model... ${(p*100).toFixed(1)}%`);
-      }
+/* ----------------------------------------------------------- */
+/* FIXED POSTPROCESS — UNIVERSAL YOLOv8 FORMAT HANDLER */
+function fastPostprocess(outputTensor, scoreThreshold) {
+    let t = outputTensor.squeeze(); // [N, row] or [row, N]
+
+    // auto fix orientation
+    if (t.shape[0] < t.shape[1]) {
+        t = t.transpose(); // ensure [N, rowSize]
+    }
+
+    const [N, rowSize] = t.shape;
+    const raw = t.dataSync();
+
+    const expected = CLASS_NAMES.length;
+    const numClasses = rowSize - 4;   // dynamic class count
+
+    if (numClasses !== expected) {
+        console.warn("⚠ Model output class count mismatch:", numClasses, "expected:", expected);
+    }
+
+    const boxes = [];
+    const scores = [];
+    const classIds = [];
+
+    for (let i = 0; i < N; i++) {
+        const base = i * rowSize;
+
+        const x = raw[base + 0];
+        const y = raw[base + 1];
+        const w = raw[base + 2];
+        const h = raw[base + 3];
+
+        // softmax
+        let maxLogit = -Infinity;
+        for (let c = 4; c < rowSize; c++) {
+            const v = raw[base + c];
+            if (v > maxLogit) maxLogit = v;
+        }
+
+        let sumExp = 0;
+        const exps = [];
+        for (let c = 4; c < rowSize; c++) {
+            const e = Math.exp(raw[base + c] - maxLogit);
+            exps[c - 4] = e;
+            sumExp += e;
+        }
+
+        let bestProb = 0;
+        let bestClass = 0;
+        for (let c = 0; c < exps.length; c++) {
+            const p = exps[c] / sumExp;
+            if (p > bestProb) { bestProb = p; bestClass = c; }
+        }
+
+        if (bestProb < scoreThreshold) continue;
+
+        const x1 = (x - w/2) * INPUT_SIZE;
+        const y1 = (y - h/2) * INPUT_SIZE;
+        const x2 = (x + w/2) * INPUT_SIZE;
+        const y2 = (y + h/2) * INPUT_SIZE;
+
+        boxes.push([y1,x1,y2,x2]);
+        scores.push(bestProb);
+        classIds.push(bestClass);
+    }
+
+    if (!boxes.length) return [];
+
+    const boxT = tf.tensor2d(boxes);
+    const scoreT = tf.tensor1d(scores);
+
+    const idx = tf.image.nonMaxSuppression(
+        boxT, scoreT, MAX_OUTPUT, NMS_IOU, scoreThreshold
+    ).arraySync();
+
+    const result = idx.map(i => {
+        const [y1,x1,y2,x2] = boxes[i];
+        return {x1,y1,x2,y2, score:scores[i], classId:classIds[i]};
     });
 
-    // warmup: run one dummy inference to compile kernels
-    logStatus('Warming up model...');
-    const dummy = tf.zeros([1, INPUT_SIZE, INPUT_SIZE, 3]);
-    try {
-      const warm = model.execute(dummy);
-      if (Array.isArray(warm)) warm.forEach(t=>t.dispose());
-      else warm.dispose();
-    } catch(e){
-      // if model.execute failed sync, try async
-      try{
-        const warm2 = await model.executeAsync(dummy);
-        if (Array.isArray(warm2)) warm2.forEach(t=>t.dispose());
-        else warm2.dispose();
-      }catch(err){}
-    }
-    dummy.dispose();
+    boxT.dispose();
+    scoreT.dispose();
+    t.dispose();
 
-    logStatus('Model loaded & warmed.');
-    return true;
-  } catch (err) {
-    console.error('Model load failed', err);
-    logStatus('Model load failed (see console).');
-    return false;
-  }
+    return result;
 }
 
-/* ================= CAMERA ================= */
-async function setupCamera() {
-  try {
-    logStatus('Requesting camera...');
-    const constraints = {
-      video: {
-        facingMode: usingFront ? 'user' : 'environment',
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 30, max: 60 },
-        // exposureMode is not widely supported; leaving it to browser
-      },
-      audio: false
-    };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+/* ----------------------------------------------------------- */
+/* LOAD MODEL */
+async function loadModel(){
+    try{
+        statusEl.textContent = "Loading model...";
+        progressBar.style.display = "block";
+
+        model = await tf.loadGraphModel(MODEL_URL, {
+            onProgress: p => {
+                progressFill.style.width = `${p*100}%`;
+                statusEl.textContent = `Loading model... ${(p*100).toFixed(1)}%`;
+            }
+        });
+
+        progressBar.style.display = "none";
+        statusEl.textContent = "Model loaded.";
+    } catch (e){
+        statusEl.textContent = "Model load failed.";
+        console.error(e);
+    }
+}
+
+/* ----------------------------------------------------------- */
+/* CAMERA */
+async function setupCamera(){
+    const stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:"environment" },
+        audio:false
+    });
+
     video.srcObject = stream;
-    await new Promise(res => video.onloadedmetadata = res);
+    await new Promise(r => video.onloadedmetadata = r);
     video.play();
 
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    video.style.display = 'none';
-    // apply filters if toggle
-    updateCanvasFilter();
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
 
-    logStatus('Camera ready.');
-    return true;
-  } catch (e) {
-    console.error('Camera error', e);
-    logStatus('Camera access denied or error.');
-    return false;
-  }
+    const vc = document.getElementById("video-container");
+    vc.style.width  = video.videoWidth + "px";
+    vc.style.height = video.videoHeight + "px";
 }
 
-/* ================= DRAW helpers ================= */
-function drawVideoMirrored() {
-  ctx.save();
-  ctx.scale(-1,1);
-  ctx.translate(-canvas.width,0);
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  ctx.restore();
-}
+/* ----------------------------------------------------------- */
+/* REALTIME DETECTION */
+async function detectLoop(){
+    if (!model) return;
 
-function drawDetections(boxes){
-  // draw boxes on top of current canvas (video already drawn)
-  boxes.forEach(b => {
-    const scaledX1 = b.x1 * (canvas.width / INPUT_SIZE);
-    const scaledX2 = b.x2 * (canvas.width / INPUT_SIZE);
-    const scaledY1 = b.y1 * (canvas.height / INPUT_SIZE);
-    const scaledY2 = b.y2 * (canvas.height / INPUT_SIZE);
+    tf.engine().startScope();
 
-    const x = canvas.width - scaledX2;
-    const y = scaledY1;
-    const w = scaledX2 - scaledX1;
-    const h = scaledY2 - scaledY1;
-
-    ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height)/220));
-    ctx.strokeStyle = 'rgb(0,255,180)';
-    ctx.strokeRect(x,y,w,h);
-
-    const label = `${CLASS_NAMES[b.classId] || b.classId} ${(b.score*100).toFixed(1)}%`;
-    ctx.font = `${Math.max(12, Math.round(canvas.width/40))}px Inter, Arial`;
-    const textW = ctx.measureText(label).width;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(x, y - 22, textW + 8, 20);
-    ctx.fillStyle = '#aaffff';
-    ctx.fillText(label, x+4, y-6);
-  });
-}
-
-/* ================= POSTPROCESS (fast; uses dataSync) ================= */
-function fastPostprocess(outputTensor, scoreThreshold){
-  // Expect output tensor shape: [1, N, 20] or [1, 20, N] previously we used transpose.
-  // We'll follow previous approach: squeeze -> transpose -> dataSync and then iterate by rowSize.
-  // Keep same logic as earlier but use dataSync to avoid promise array().
-
-  const squeezed = outputTensor.squeeze(); // shape maybe [20,8400] or [8400,20] depending model
-  // Try to get shape and transpose if needed
-  let t = squeezed;
-  const shape = t.shape; // e.g. [8400, 20] or [20, 8400]
-  if (shape.length === 2 && shape[0] === 20) {
-    // shape [20, N] -> transpose to [N, 20]
-    t = t.transpose();
-  }
-  // Now t shape should be [N, 20]
-  const [N, rowSize] = t.shape; // rowSize expected 20
-  const raw = t.dataSync(); // Float32Array length N * rowSize
-  const boxes = [];
-  const scores = [];
-  const classIds = [];
-
-  // iterate rows
-  for (let i = 0; i < N; i++){
-    const base = i * rowSize;
-    const x = raw[base + 0];
-    const y = raw[base + 1];
-    const w = raw[base + 2];
-    const h = raw[base + 3];
-    // class logits start at index 4
-    let maxProb = -Infinity;
-    let maxIdx = 0;
-    // compute softmax in a numerically stable way for this row
-    // first find max logit
-    let maxLogit = -Infinity;
-    for (let c = 4; c < rowSize; c++){
-      const v = raw[base + c];
-      if (v > maxLogit) maxLogit = v;
-    }
-    // sum exps
-    let sumExp = 0;
-    const exps = [];
-    for (let c = 4; c < rowSize; c++){
-      const e = Math.exp(raw[base + c] - maxLogit);
-      exps.push(e);
-      sumExp += e;
-    }
-    // compute probs and get max
-    for (let c = 0; c < exps.length; c++){
-      const prob = exps[c] / sumExp;
-      if (prob > maxProb) { maxProb = prob; maxIdx = c; }
-    }
-
-    if (maxProb < scoreThreshold) continue;
-
-    // convert xywh normalized (assuming model raw outputs normalized) to pixel coords in INPUT_SIZE
-    // same as xywh_to_xyxy used before
-    const x1 = (x - w/2) * INPUT_SIZE;
-    const y1 = (y - h/2) * INPUT_SIZE;
-    const x2 = (x + w/2) * INPUT_SIZE;
-    const y2 = (y + h/2) * INPUT_SIZE;
-
-    // Push in format [y1, x1, y2, x2] because tf.image.nonMaxSuppression expects [y1,x1,y2,x2]
-    boxes.push([y1, x1, y2, x2]);
-    scores.push(maxProb);
-    classIds.push(maxIdx);
-  }
-
-  // free tensor
-  if (t !== squeezed) squeezed.dispose();
-  else t.dispose();
-
-  if (!boxes.length) return [];
-
-  // convert to tensors for NMS
-  const boxesTensor = tf.tensor2d(boxes);
-  const scoresTensor = tf.tensor1d(scores);
-
-  // synchronous nonMaxSuppression
-  const selected = tf.image.nonMaxSuppression(boxesTensor, scoresTensor, MAX_OUTPUT, NMS_IOU, scoreThreshold);
-  const selIdx = selected.arraySync(); // small array of indices
-
-  const results = selIdx.map(i => {
-    const [y1,x1,y2,x2] = boxes[i];
-    return { x1, y1, x2, y2, score: scores[i], classId: classIds[i] };
-  });
-
-  boxesTensor.dispose();
-  scoresTensor.dispose();
-  selected.dispose();
-
-  return results;
-}
-
-/* ================= MAIN LOOP & Adaptive skip ================= */
-async function mainLoop() {
-  // use video.requestVideoFrameCallback for each video frame
-  const onFrame = async () => {
-    const t0 = performance.now();
-    frameCount++;
-
-    // draw video every frame (mirrored)
-    drawVideoMirrored();
-
-    // adaptive skip logic:
-    // If inference is slow, increase skipFrames; if fast, lower it.
-    // Compute expected frame time for targetFPS
-    const expectedFrameTime = 1000 / targetFPS;
-    // determine whether to run inference this frame
-    let doInference = false;
-    if (frameCount % skipFrames === 0) doInference = true;
-
-    // If model not loaded, skip inference
-    if (!model) doInference = false;
-
-    if (doInference) {
-      const inferStart = performance.now();
-
-      // prepare input tensor quickly using tf.tidy
-      let input = tf.tidy(() => {
+    const input = tf.tidy(() => {
         const img = tf.browser.fromPixels(video);
-        return img.resizeBilinear([INPUT_SIZE, INPUT_SIZE]).div(255.0).expandDims(0);
-      });
+        return img.resizeBilinear([INPUT_SIZE, INPUT_SIZE])
+                  .div(255)
+                  .expandDims(0);
+    });
 
-      // run inference (prefer sync execute; fallback to async if fails)
-      let out = null;
-      try {
-        out = model.execute(input); // sync
-      } catch (err) {
-        try {
-          out = await model.executeAsync(input); // fallback
-        } catch (err2) {
-          console.error('Inference failed', err2);
-        }
-      }
-
-      // postprocess (fast)
-      if (out) {
-        const det = fastPostprocess(out, SCORE_THRESHOLD);
-        lastDetections = det;
-      } else {
-        lastDetections = [];
-      }
-
-      // dispose
-      if (Array.isArray(out)) out.forEach(t=>t.dispose());
-      else if (out) out.dispose();
-      input.dispose();
-
-      const inferEnd = performance.now();
-      lastInferMs = inferEnd - inferStart;
-
-      // adapt skipFrames: try to keep inference work within expectedFrameTime
-      // measured inference time + some overhead => how many frames to skip
-      const desiredSkip = Math.max(1, Math.round((lastInferMs) / expectedFrameTime));
-      // dampen changes
-      skipFrames = Math.max(1, Math.min(6, Math.round(skipFrames*0.7 + desiredSkip*0.3)));
-
+    let out = null;
+    try {
+        out = await model.executeAsync(input);
+    } catch (e){
+        console.error("Inference failed:", e);
+        tf.dispose(input);
+        tf.engine().endScope();
+        return requestAnimationFrame(detectLoop);
     }
 
-    // draw last detections (no matter inference or not)
-    if (lastDetections && lastDetections.length) drawDetections(lastDetections);
+    const det = fastPostprocess(Array.isArray(out) ? out[0] : out, SCORE_THRESHOLD);
+    drawBoxes(det);
 
-    // update FPS display using moving average
-    const t1 = performance.now();
-    const frameTime = t1 - lastFrameTime;
-    lastFrameTime = t1;
-    const instantFPS = 1000 / (frameTime || 16.6);
-    fps = Math.round( (fps * 0.85) + (instantFPS * 0.15) );
-    fpsEl.textContent = fps;
+    tf.dispose([input,out]);
+    tf.engine().endScope();
 
-    // show additional info in status (optional)
-    statusEl.textContent = `Inf ${Math.round(lastInferMs)}ms • skip ${skipFrames}`;
-
-    // request next frame
-    video.requestVideoFrameCallback(onFrame);
-  };
-
-  // start
-  video.requestVideoFrameCallback(onFrame);
+    requestAnimationFrame(detectLoop);
 }
 
-/* ================= UI Binding ================= */
-confSlider.addEventListener('input', ()=> {
-  SCORE_THRESHOLD = parseFloat(confSlider.value);
-  confVal.textContent = SCORE_THRESHOLD.toFixed(2);
-});
-filterToggle.addEventListener('change', updateCanvasFilter);
-switchCamBtn.addEventListener('click', async ()=> {
-  usingFront = !usingFront;
-  await setupCamera();
-});
-targetFPSSlider.addEventListener('input', ()=> {
-  targetFPS = parseInt(targetFPSSlider.value);
-  targetFPSVal.textContent = targetFPS;
-});
-reloadModelBtn.addEventListener('click', async ()=>{
-  MODEL_URL = modelUrlInput.value.trim();
-  if (!MODEL_URL) { alert('Provide model URL'); return; }
-  if (model) { try { model.dispose(); } catch(e){} model = null; }
-  await loadModel(MODEL_URL);
-});
-
-function updateCanvasFilter(){
-  if (filterToggle.checked){
-    // CSS filters for sharpening/exposure - sharpening is simulated via contrast & saturate
-    canvas.style.filter = 'contrast(1.15) saturate(1.15) brightness(1.05)';
-  } else {
-    canvas.style.filter = '';
-  }
-}
-
-/* ================= STARTUP SEQUENCE ================= */
+/* ----------------------------------------------------------- */
+/* MAIN */
 (async () => {
-  targetFPSVal.textContent = targetFPS;
-  confVal.textContent = SCORE_THRESHOLD.toFixed(2);
-
-  await initTF();
-
-  const camOk = await setupCamera();
-  if (!camOk) return;
-
-  // load model
-  const url = MODEL_URL;
-  const ok = await loadModel(url);
-  if (!ok) { console.warn('model load failed'); }
-
-  // start main loop
-  mainLoop();
+    await loadModel();
+    await setupCamera();
+    statusEl.textContent = "Model ready — Detecting...";
+    detectLoop();
 })();
-
 </script>
+
 </body>
 </html>
