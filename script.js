@@ -1,263 +1,193 @@
-// Anda harus mengganti URL ini dengan lokasi model.json Anda yang sebenarnya
-const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
-
-const statusEl = document.getElementById('status');
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+// Impor TensorFlow.js di dalam Web Worker
+importScripts('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.2.0/dist/tf.min.js');
 
 let model = null;
-const INPUT_SIZE = 640;    // Sesuai export YOLO (640x640)
-const SCORE_THRESHOLD = 0.1; // Tetap 0.1 untuk debugging
+let lastInferenceEnd = 0;
+
+// --- KONSTANTA & KONFIGURASI ---
+const INPUT_SIZE = 640;
+const SCORE_THRESHOLD = 0.1;
 const NMS_IOU = 0.45;
-const MAX_OUTPUT = 50;    // Max boxes returned by NMS
-const NUM_CLASSES = 16;   
+const MAX_OUTPUT = 50;
+const NUM_CLASSES = 16; 
 
-// --- DEFINISI NAMA KELAS AKTUAL (16 Kelas) ---
+// DEFINISI NAMA KELAS AKTUAL (Harus sama dengan di index.html)
 const CLASS_NAMES = [
-    "Alpukat",
-    "Anggur",
-    "Apel",
-    "Apel Hijau",
-    "Jeruk",
-    "Lemon",
-    "Mangga",
-    "Melon",
-    "Nanas",
-    "Pepaya",
-    "Pir",
-    "Pisang",
-    "Rambutan",
-    "Salak",
-    "Semangka", 
-    "Stroberi" 
+    "Alpukat", "Anggur", "Apel", "Apel Hijau", "Jeruk", "Lemon", "Mangga", "Melon", 
+    "Nanas", "Pepaya", "Pir", "Pisang", "Rambutan", "Salak", "Semangka", "Stroberi" 
 ];
-// ------------------------------------------
 
-// --- Utility Functions ---
 
-function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+// --- Utility Functions (Dibuat di Worker) ---
 
-// Fungsi Softmax untuk mengkonversi logit kelas menjadi probabilitas
 function softmax(arr) {
-  const max = Math.max(...arr);
-  const exps = arr.map(v => Math.exp(v - max));
-  const sum = exps.reduce((a,b)=>a+b,0);
-  return exps.map(e => e / sum);
+    const max = arr.reduce((a, b) => Math.max(a, b), -Infinity);
+    const exps = arr.map(v => Math.exp(v - max));
+    const sum = exps.reduce((a, b) => a + b, 0);
+    return exps.map(e => e / sum);
 }
 
-// Konversi format box dari [center_x, center_y, width, height] ke [x1, y1, x2, y2]
 function xywh_to_xyxy(x, y, w, h) {
-  const x1 = x - w/2;
-  const y1 = y - h/2;
-  const x2 = x + w/2;
-  const y2 = y + h/2;
-  return [x1, y1, x2, y2];
+    const x1 = x - w/2;
+    const y1 = y - h/2;
+    const x2 = x + w/2;
+    const y2 = y + h/2;
+    return [x1, y1, x2, y2];
 }
-
-// --- FUNGSI UTAMA PERBAIKAN: Mirroring Video dan Deteksi ---
-function drawBoxes(boxes) {
-  
-  // 1. Gambar video frame dengan MIRRORING
-  ctx.save();
-  ctx.scale(-1, 1);
-  ctx.translate(-canvas.width, 0); 
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-  ctx.restore(); // Kembalikan konteks ke normal setelah menggambar video
-  
-  // 2. Gambar deteksi dan teks di konteks NORMAL
-  boxes.forEach(b => {
-    // Ambil koordinat yang sudah diskalakan
-    const scaledX1 = b.x1 * (canvas.width / INPUT_SIZE);
-    const scaledX2 = b.x2 * (canvas.width / INPUT_SIZE);
-    const scaledY1 = b.y1 * (canvas.height / INPUT_SIZE);
-    const scaledY2 = b.y2 * (canvas.height / INPUT_SIZE);
-    
-    // Terapkan formula MIRRORING ke koordinat X
-    // X awal deteksi harus dibalik: canvas.width - X2_scaled (untuk x1)
-    const x = canvas.width - scaledX2; 
-    const y = scaledY1;
-    const w = scaledX2 - scaledX1;
-    const h = scaledY2 - scaledY1;
-    
-    // Box (Digambar dalam koordinat normal canvas, yang sesuai dengan video yang di-mirror)
-    ctx.strokeStyle = "lime";
-    ctx.lineWidth = Math.max(2, Math.round(Math.min(canvas.width, canvas.height) / 200));
-    ctx.strokeRect(x, y, w, h);
-
-    // Label: Gambar Teks di koordinat NORMAL (Teks TIDAK terbalik)
-    
-    // Mengambil nama kelas dan membentuk label
-    const className = CLASS_NAMES[b.classId] || `Unknown Class ${b.classId}`; 
-    const label = `${className} ${(b.score*100).toFixed(1)}%`; 
-    
-    ctx.font = "18px Arial";
-    const textW = ctx.measureText(label).width;
-    const pad = 6;
-    
-    // Label bg (koordinat normal)
-    ctx.fillStyle = "rgba(0,0,0,0.6)";
-    ctx.fillRect(x, y - 22, textW + pad, 22);
-
-    // Text (koordinat normal)
-    ctx.fillStyle = "lime";
-    ctx.fillText(label, x + 4, y - 6);
-  });
-}
-
-// --- Post-Processing dengan Koreksi YOLOv8 dan Debugging (Tidak Berubah) ---
 
 async function postprocess(outputTensor) {
-  // Model output shape: [1, 20, 8400] -> transpose -> [8400, 20]
-  let t = outputTensor;
+    // Logic Postprocessing sama persis dengan yang ada di kode asli Anda.
+    let t = outputTensor;
 
-  const transposed = tf.tidy(() => t.squeeze().transpose()); // [8400, 20]
-  const data = await transposed.array();
-  transposed.dispose();
+    const transposed = tf.tidy(() => t.squeeze().transpose());
+    const data = await transposed.array();
+    transposed.dispose();
 
-  const boxes = [];
-  const scores = [];
-  const classIds = [];
-    
-    let maxOverallScore = 0; 
+    const boxes = [];
+    const scores = [];
+    const classIds = [];
+        
+    for (let i = 0; i < data.length; i++) {
+        const row = data[i];
+        
+        const x = row[0];
+        const y = row[1];
+        const w = row[2];
+        const h = row[3];
+        
+        // Logika YOLOv8: confidence score sudah termasuk dalam kelas
+        const classLogits = row.slice(4);
+        const probs = softmax(classLogits);
+        const maxProb = Math.max(...probs);
+        const classId = probs.indexOf(maxProb);
 
-  for (let i = 0; i < data.length; i++) {
-    const row = data[i];
-    
-    const x = row[0];
-    const y = row[1];
-    const w = row[2];
-    const h = row[3];
-    
-    const classLogits = row.slice(4); 
-    const probs = softmax(classLogits);
-    const maxProb = Math.max(...probs);
-    const classId = probs.indexOf(maxProb); 
+        const finalScore = maxProb;
+        
+        if (finalScore < SCORE_THRESHOLD) continue;
 
-    const finalScore = maxProb; 
-    
-    if (finalScore > maxOverallScore) {
-        maxOverallScore = finalScore;
-    }
+        const [x1, y1, x2, y2] = xywh_to_xyxy(x, y, w, h);
 
-    if (finalScore < SCORE_THRESHOLD) continue; 
+        // tf.image.nonMaxSuppressionAsync membutuhkan koordinat dalam format [y1, x1, y2, x2]
+        boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]);
+        scores.push(finalScore);
+        classIds.push(classId);
+    }
 
-    const [x1, y1, x2, y2] = xywh_to_xyxy(x, y, w, h);
+    if (boxes.length === 0) {
+        return [];
+    }
+        
+    const boxesTensor = tf.tensor2d(boxes);
+    const scoresTensor = tf.tensor1d(scores);
+    const selectedIdx = await tf.image.nonMaxSuppressionAsync(
+        boxesTensor, scoresTensor, MAX_OUTPUT, NMS_IOU, SCORE_THRESHOLD
+    );
+    const selected = await selectedIdx.array();
 
-    boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]); 
-    scores.push(finalScore);
-    classIds.push(classId); 
-  }
+    const final = [];
+    for (let idx of selected) {
+        const [y1,x1,y2,x2] = boxes[idx];
+        final.push({
+            x1: x1 / INPUT_SIZE, // Normalisasi kembali ke 0-1 untuk worker
+            y1: y1 / INPUT_SIZE,
+            x2: x2 / INPUT_SIZE,
+            y2: y2 / INPUT_SIZE,
+            score: scores[idx],
+            classId: classIds[idx],
+            className: CLASS_NAMES[classIds[idx]] // Tambahkan nama kelas
+        });
+    }
 
-    console.log(`Max class score found: ${maxOverallScore.toFixed(3)}`);
-    console.log(`Detections passing initial threshold (${SCORE_THRESHOLD}): ${boxes.length}`);
+    tf.dispose([boxesTensor, scoresTensor, selectedIdx]);
 
-  if (boxes.length === 0) {
-    return [];
-  }
-  
-  const boxesTensor = tf.tensor2d(boxes);
-  const scoresTensor = tf.tensor1d(scores);
-  const selectedIdx = await tf.image.nonMaxSuppressionAsync(
-    boxesTensor, scoresTensor, MAX_OUTPUT, NMS_IOU, SCORE_THRESHOLD
-  );
-  const selected = await selectedIdx.array();
-
-  const final = [];
-  for (let idx of selected) {
-    const [y1,x1,y2,x2] = boxes[idx];
-    final.push({
-      x1: x1, y1: y1, x2: x2, y2: y2,
-      score: scores[idx],
-      classId: classIds[idx] 
-    });
-  }
-
-  boxesTensor.dispose();
-  scoresTensor.dispose();
-  selectedIdx.dispose();
-
-  return final;
+    return final;
 }
 
-// --- Inisialisasi dan Setup Kamera/Model (Tidak Berubah) ---
 
-async function loadModel() {
-  try {
-    statusEl.textContent = "Loading model...";
-    model = await tf.loadGraphModel(MODEL_URL);
-    statusEl.textContent = "Model loaded.";
-    console.log("Model loaded:", model);
-  } catch (err) {
-    console.error("Failed to load model:", err);
-    statusEl.textContent = "Failed to load model. Check console.";
-  }
+// --- Handler Inferensi di Worker ---
+async function runInference(data) {
+    if (!model) {
+        console.warn("Model belum dimuat di worker.");
+        return;
+    }
+    
+    const startTime = performance.now();
+    
+    // 1. Buat tf.Tensor dari imageData (yang sudah dikirim via Transferable)
+    // Ingat: imageData.data adalah Uint8ClampedArray (r,g,b,a)
+    const pixels = new Uint8ClampedArray(data.imageData);
+    const imageTensor = tf.tensor4d(pixels, [data.height, data.width, 4]).slice([0, 0, 0], [-1, -1, 3]); // Hapus alpha channel (A)
+
+    tf.engine().startScope();
+    
+    const input = tf.tidy(() => {
+        // Pre-processing: resize, normalisasi, dan expandDims
+        return imageTensor.resizeBilinear([INPUT_SIZE, INPUT_SIZE])
+                          .div(255.0)
+                          .expandDims(0);
+    });
+
+    let output = null;
+    try {
+        const res = await model.executeAsync(input);
+        if (Array.isArray(res)) {
+            output = res[0];
+            for (let i = 1; i < res.length; i++) if (res[i] && res[i].dispose) res[i].dispose();
+        } else {
+            output = res;
+        }
+    } catch (err) {
+        console.error("Model inference failed in worker:", err);
+        postMessage({ type: 'ERROR', message: 'Inference failed in worker.' });
+        tf.dispose(input);
+        tf.engine().endScope();
+        return;
+    }
+    
+    const detections = await postprocess(output);
+    
+    tf.dispose([input, output, imageTensor]); // Membersihkan tensor
+    tf.engine().endScope();
+    
+    const endTime = performance.now();
+    const inferenceTime = endTime - startTime;
+    const fps = 1000 / inferenceTime;
+
+    // Kirim hasil deteksi kembali ke thread utama
+    postMessage({
+        type: 'RESULT',
+        boxes: detections,
+        fps: fps,
+        // Kirim kembali buffer imageData untuk digunakan lagi di thread utama (jika menggunakan transfer)
+        // Saat ini tidak perlu karena buffer sudah dibuang oleh Worker, tapi ini praktik yang baik
+        // imageData: data.imageData 
+    });
 }
 
-async function setupCamera() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "environment" },
-      audio: false
-    });
-    video.srcObject = stream;
-    await new Promise(resolve => video.onloadedmetadata = resolve);
-    video.play();
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-  } catch (err) {
-    console.error("Camera error:", err);
-    statusEl.textContent = "Camera error. Allow camera and reload.";
-  }
-}
 
-// --- Detection Loop (Tidak Berubah) ---
+// --- Main Message Listener ---
+self.onmessage = async (event) => {
+    const data = event.data;
 
-async function detectLoop() {
-  if (!model) return;
-
-  tf.engine().startScope();
-
-  const input = tf.tidy(() => {
-    const img = tf.browser.fromPixels(video);
-    return img.resizeBilinear([INPUT_SIZE, INPUT_SIZE]).div(255.0).expandDims(0);
-  });
-
-  let output = null;
-  try {
-    const res = await model.executeAsync(input);
-    if (Array.isArray(res)) {
-      output = res[0];
-      for (let i = 1; i < res.length; i++) if (res[i] && res[i].dispose) res[i].dispose();
-    } else {
-      output = res;
-    }
-  } catch (err) {
-    console.error("Model inference failed:", err);
-    statusEl.textContent = "Inference error (see console).";
-    tf.dispose(input);
-    tf.engine().endScope();
-    requestAnimationFrame(detectLoop);
-    return;
-  }
-
-  const detections = await postprocess(output);
-
-  drawBoxes(detections);
-
-  tf.dispose([input, output]);
-  tf.engine().endScope();
-
-  requestAnimationFrame(detectLoop);
-}
-
-// --- Main Execution (Tidak Berubah) ---
-
-(async () => {
-  await loadModel();
-  await setupCamera();
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  statusEl.textContent = "Model ready — running detection.";
-  detectLoop();
-})();
+    if (data.type === 'INIT') {
+        // Inisialisasi model
+        tf.setBackend('webgl').then(async () => {
+            console.log("Worker: TFJS WebGL backend set.");
+            try {
+                model = await tf.loadGraphModel(data.modelUrl, {
+                    onProgress: (fraction) => {
+                        postMessage({ type: 'LOADING', progress: (fraction * 100) });
+                    }
+                });
+                // Lakukan satu inferensi dummy untuk "pemanasan" (warm-up)
+                model.predict(tf.zeros([1, INPUT_SIZE, INPUT_SIZE, 3])).dispose();
+                postMessage({ type: 'LOADED' });
+            } catch (err) {
+                postMessage({ type: 'ERROR', message: 'Failed to load model in worker.' });
+            }
+        });
+    } else if (data.type === 'INFER') {
+        // Jalankan inferensi
+        runInference(data);
+    }
+};
