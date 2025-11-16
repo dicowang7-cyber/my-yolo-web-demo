@@ -1,5 +1,5 @@
 // Anda harus mengganti URL ini dengan lokasi model.json Anda yang sebenarnya
-const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/8bit/model.json";
+const MODEL_URL = "https://xmrz7019w0uk3zke.public.blob.vercel-storage.com/model.json";
 
 const statusEl = document.getElementById('status');
 const video = document.getElementById('video');
