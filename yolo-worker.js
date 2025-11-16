@@ -9,79 +9,91 @@ let MAX_OUTPUT;
 let NUM_CLASSES;
 let CLASS_NAMES;
 
-// --- POST-PROCESSING KRITIS (YOLOv8 Fixed) ---
+// --- UTILITY FUNCTIONS ASLI ANDA ---
+
+function softmax(arr) {
+    const max = arr.reduce((a, b) => Math.max(a, b), -Infinity);
+    const exps = arr.map(v => Math.exp(v - max));
+    const sum = exps.reduce((a, b) => a + b, 0);
+    return exps.map(e => e / sum);
+}
+
+function xywh_to_xyxy(x, y, w, h) {
+    const x1 = x - w/2;
+    const y1 = y - h/2;
+    const x2 = x + w/2;
+    const y2 = y + h/2;
+    return [x1, y1, x2, y2];
+}
+
+// --- FUNGSI POST-PROCESSING SESUAI LOGIKA ANDA ---
 
 async function postprocess(outputTensor) {
-    let results = [];
+    // Peringatan: Proses ini sangat lambat karena menggunakan Array JS/CPU loop
+
+    // 1. Dapatkan data array mentah dari output tensor
+    const transposed = tf.tidy(() => outputTensor.squeeze().transpose()); // [8400, 20]
+    const data = await transposed.array();
+    transposed.dispose();
+
+    const boxes = [];
+    const scores = [];
+    const classIds = [];
+        
+    for (let i = 0; i < data.length; i++) {
+        const row = data[i];
+        
+        const x = row[0];
+        const y = row[1];
+        const w = row[2];
+        const h = row[3];
+        
+        // Logika Post-processing Anda:
+        const classLogits = row.slice(4); 
+        const probs = softmax(classLogits);
+        const maxProb = Math.max(...probs);
+        const classId = probs.indexOf(maxProb); 
+
+        const finalScore = maxProb; 
+        
+        // Gunakan threshold rendah yang dikirim dari main thread
+        if (finalScore < SCORE_THRESHOLD) continue; 
+
+        const [x1, y1, x2, y2] = xywh_to_xyxy(x, y, w, h);
+
+        // Koordinat disamakan dengan format output Anda: [y1, x1, y2, x2] dalam PIXEL (0-640)
+        boxes.push([y1 * INPUT_SIZE, x1 * INPUT_SIZE, y2 * INPUT_SIZE, x2 * INPUT_SIZE]); 
+        scores.push(finalScore);
+        classIds.push(classId); 
+    }
+
+    if (boxes.length === 0) {
+        return [];
+    }
     
-    const [finalBoxes, finalScores, finalClassIds] = tf.tidy(() => {
-        
-        // Output: [1, 20, 8400] -> Transpose menjadi: [8400, 20]
-        const transposed = outputTensor.squeeze([0]).transpose([1, 0]);
-
-        // 1. Pisahkan Bounding Box (4) dan Class Logits (16)
-        // YOLOv8 standar: 4 Box + N Kelas
-        const boxes = transposed.slice([0, 0], [-1, 4]); 
-        const classScores = transposed.slice([0, 4], [-1, NUM_CLASSES]); 
-
-        // 2. Cari Max Score dan Max Class ID
-        // Skor tertinggi di antara logits kelas adalah skor objek/kelas
-        const maxScores = classScores.max(1); 
-        const classIds = classScores.argMax(1); 
-        
-        // --- Filtering Awal menggunakan Threshold ---
-        const validScoresMask = maxScores.greater(SCORE_THRESHOLD); 
-        const validIndices = validScoresMask.where(validScoresMask, tf.zerosLike(validScoresMask)).arraySync().map((isValid, index) => isValid === 1 ? index : -1).filter(i => i !== -1);
-
-        if (validIndices.length === 0) {
-            return [tf.tensor2d([]), tf.tensor1d([]), tf.tensor1d([])];
-        }
-
-        const filteredBoxes = boxes.gather(validIndices);
-        const filteredScores = maxScores.gather(validIndices);
-        const filteredClassIds = classIds.gather(validIndices);
-        
-        // 3. Ubah format dari XYWH ke XYXY (Normalisasi ke 0-1 untuk NMS)
-        // TFJS NMS membutuhkan format [y1, x1, y2, x2]
-        
-        const [x, y, w, h] = tf.split(filteredBoxes, 4, 1);
-        
-        const x1 = tf.sub(x, tf.div(w, 2));
-        const y1 = tf.sub(y, tf.div(h, 2));
-        const x2 = tf.add(x, tf.div(w, 2));
-        const y2 = tf.add(y, tf.div(h, 2));
-        
-        // Gabungkan dalam format NMS [y1, x1, y2, x2] (Normalisasi koordinat 0-1)
-        const nmsBoxes = tf.stack([tf.div(y1, INPUT_SIZE), tf.div(x1, INPUT_SIZE), tf.div(y2, INPUT_SIZE), tf.div(x2, INPUT_SIZE)], 1);
-        
-        return [nmsBoxes, filteredScores, filteredClassIds];
-    });
-
-    // 4. Non-Max Suppression (NMS)
+    // Non-Max Suppression (NMS) - Perlu Tensor
+    const boxesTensor = tf.tensor2d(boxes);
+    const scoresTensor = tf.tensor1d(scores);
     const selectedIdx = await tf.image.nonMaxSuppressionAsync(
-        finalBoxes, finalScores, MAX_OUTPUT, NMS_IOU, SCORE_THRESHOLD
+        boxesTensor, scoresTensor, MAX_OUTPUT, NMS_IOU, SCORE_THRESHOLD
     );
-    
-    // 5. Ambil hasil akhir
-    const finalBoxesArray = await finalBoxes.gather(selectedIdx).array();
-    const finalScoresArray = await finalScores.gather(selectedIdx).array();
-    const finalClassIdsArray = await finalClassIds.gather(selectedIdx).array();
-    
-    // 6. Format hasil
-    for (let i = 0; i < finalScoresArray.length; i++) {
-        const [y1, x1, y2, x2] = finalBoxesArray[i];
-        
-        results.push({
-            // Koordinat dikirim kembali sebagai nilai 0-1
+    const selected = await selectedIdx.array();
+
+    const final = [];
+    for (let idx of selected) {
+        const [y1, x1, y2, x2] = boxes[idx];
+        final.push({
+            // Koordinat dikembalikan sebagai PIXEL (0-640)
             x1: x1, y1: y1, x2: x2, y2: y2, 
-            score: finalScoresArray[i],
-            classId: finalClassIdsArray[i],
-            className: CLASS_NAMES[finalClassIdsArray[i]]
+            score: scores[idx],
+            classId: classIds[idx],
+            className: CLASS_NAMES[classIds[idx]]
         });
     }
 
-    tf.dispose([finalBoxes, finalScores, finalClassIds, selectedIdx]);
-    return results;
+    tf.dispose([boxesTensor, scoresTensor, selectedIdx]);
+
+    return final;
 }
 
 
@@ -134,7 +146,7 @@ self.onmessage = async (event) => {
     if (data.type === 'INIT') {
         // Terima konfigurasi dari main thread
         INPUT_SIZE = data.inputSize;
-        SCORE_THRESHOLD = data.scoreThreshold;
+        SCORE_THRESHOLD = data.scoreThreshold; // Menerima 0.001
         NMS_IOU = data.nmsIou;
         MAX_OUTPUT = data.maxOutput;
         NUM_CLASSES = data.numClasses;
@@ -147,7 +159,6 @@ self.onmessage = async (event) => {
                         postMessage({ type: 'LOADING', progress: (fraction * 100) });
                     }
                 });
-                // Warm-up
                 model.predict(tf.zeros([1, INPUT_SIZE, INPUT_SIZE, 3])).dispose();
                 postMessage({ type: 'LOADED' });
             } catch (err) {
